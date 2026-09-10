@@ -230,6 +230,44 @@ def new_student():
         return redirect(url_for("students"))
     return render_template("new_student.html")
 
+@app.route("/entrenador/alumno/<int:sid>/editar", methods=["GET", "POST"])
+@coach_required
+def edit_student(sid):
+    c = db()
+    s = c.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+    if not s:
+        c.close()
+        flash("Alumno no encontrado.")
+        return redirect(url_for("students"))
+    if request.method == "POST":
+        parent_name = request.form["parent_name"].strip()
+        parent_whatsapp = request.form["parent_whatsapp"].strip()
+        student_name = request.form["student_name"].strip()
+        dni = request.form["dni"].strip()
+        if not parent_name or not parent_whatsapp or not student_name or not dni:
+            c.close()
+            flash("Completa nombre, WhatsApp, alumno y DNI.")
+            return redirect(url_for("edit_student", sid=sid))
+        u = c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=?", (parent_whatsapp,)).fetchone()
+        if u:
+            user_id = u["id"]
+            c.execute("UPDATE users SET name=?, password=?, dni=? WHERE id=?", (parent_name, dni, dni, user_id))
+        else:
+            user_id = c.execute(
+                "INSERT INTO users(role,name,whatsapp,password,dni) VALUES('parent',?,?,?,?)",
+                (parent_name, parent_whatsapp, dni, dni)
+            ).lastrowid
+        c.execute("""UPDATE students SET user_id=?, parent_name=?, parent_whatsapp=?, student_name=?, dni=?,
+                     age=?, zone=?, mode=?, place=?, tariff=?, photo_consent=? WHERE id=?""",
+                  (user_id, parent_name, parent_whatsapp, student_name, dni, int(request.form["age"]),
+                   request.form["zone"], request.form["mode"], request.form["place"],
+                   float(request.form["tariff"]), request.form["photo_consent"], sid))
+        c.commit(); c.close()
+        flash("Alumno actualizado. Puede ingresar con su WhatsApp y DNI.")
+        return redirect(url_for("student_detail", sid=sid))
+    c.close()
+    return render_template("edit_student.html", s=s)
+
 @app.route("/entrenador/alumno/<int:sid>")
 @coach_required
 def student_detail(sid):
