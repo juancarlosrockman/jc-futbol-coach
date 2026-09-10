@@ -1,6 +1,7 @@
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import sqlite3
+import re
 from pathlib import Path
 from functools import wraps
 
@@ -86,6 +87,11 @@ def init_db():
       notes TEXT
     );
     """)
+
+    # Migration for databases created before DNI was added. Never deletes existing data.
+    user_columns = {row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+    if "dni" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN dni TEXT")
 
     # Demo accounts/data only. Replace/remove before production.
     if not c.execute("SELECT 1 FROM users LIMIT 1").fetchone():
@@ -300,13 +306,44 @@ def teams():
 @app.route("/alumno/login", methods=["GET","POST"])
 def parent_login():
     if request.method=="POST":
+        whatsapp = re.sub(r"\D", "", request.form.get("whatsapp", ""))
+        password = request.form.get("password", "").strip()
         c=db(); u=c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=? AND password=?",
-                            (request.form["whatsapp"],request.form["password"])).fetchone(); c.close()
+                            (whatsapp,password)).fetchone(); c.close()
         if u:
             session["role"]="parent"; session["user_id"]=u["id"]
             return redirect(url_for("parent_home"))
-        flash("Datos incorrectos.")
+        flash("Datos incorrectos. Usa el WhatsApp registrado y tu contraseña.")
     return render_template("parent_login.html")
+
+@app.route("/alumno/cambiar-contrasena", methods=["GET","POST"])
+def change_password():
+    if session.get("role") != "parent":
+        return redirect(url_for("parent_login"))
+    if request.method == "POST":
+        current = request.form.get("current_password", "").strip()
+        new_password = request.form.get("new_password", "").strip()
+        confirm = request.form.get("confirm_password", "").strip()
+        if not current or not new_password or not confirm:
+            flash("Completa todos los campos.")
+            return redirect(url_for("change_password"))
+        if new_password != confirm:
+            flash("Las nuevas contraseñas no coinciden.")
+            return redirect(url_for("change_password"))
+        if len(new_password) < 6:
+            flash("La nueva contraseña debe tener al menos 6 caracteres.")
+            return redirect(url_for("change_password"))
+        c=db()
+        u=c.execute("SELECT * FROM users WHERE id=? AND role='parent'", (session["user_id"],)).fetchone()
+        if not u or u["password"] != current:
+            c.close()
+            flash("La contraseña actual es incorrecta.")
+            return redirect(url_for("change_password"))
+        c.execute("UPDATE users SET password=? WHERE id=?", (new_password, u["id"]))
+        c.commit(); c.close()
+        flash("Contraseña actualizada correctamente.")
+        return redirect(url_for("parent_home"))
+    return render_template("change_password.html")
 
 @app.route("/alumno")
 def parent_home():
