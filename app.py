@@ -92,6 +92,12 @@ def init_db():
     user_columns = {row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()}
     if "dni" not in user_columns:
         c.execute("ALTER TABLE users ADD COLUMN dni TEXT")
+    student_columns = {row[1] for row in c.execute("PRAGMA table_info(students)").fetchall()}
+    if "dni" not in student_columns:
+        c.execute("ALTER TABLE students ADD COLUMN dni TEXT")
+    # Keep existing linked students synchronized with the DNI stored on their login account.
+    c.execute("""UPDATE students SET dni=(SELECT dni FROM users WHERE users.id=students.user_id)
+                 WHERE user_id IS NOT NULL AND (dni IS NULL OR dni='')""")
 
     # Demo accounts/data only. Replace/remove before production.
     if not c.execute("SELECT 1 FROM users LIMIT 1").fetchone():
@@ -214,9 +220,9 @@ def new_student():
                 "INSERT INTO users(role,name,whatsapp,password,dni) VALUES('parent',?,?,?,?,?)".replace("VALUES('parent',?,?,?,?,?)", "VALUES('parent',?,?,?,?)"),
                 (parent_name, parent_whatsapp, dni, dni)
             ).lastrowid
-        c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,age,zone,mode,place,tariff,photo_consent)
-                     VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                  (user_id,parent_name,parent_whatsapp,student_name,int(request.form["age"]),
+        c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                  (user_id,parent_name,parent_whatsapp,student_name,dni,int(request.form["age"]),
                    request.form["zone"],request.form["mode"],request.form["place"],
                    float(request.form["tariff"]),request.form["photo_consent"]))
         c.commit(); c.close()
@@ -308,8 +314,8 @@ def parent_login():
     if request.method=="POST":
         whatsapp = re.sub(r"\D", "", request.form.get("whatsapp", ""))
         password = request.form.get("password", "").strip()
-        c=db(); u=c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=? AND password=?",
-                            (whatsapp,password)).fetchone(); c.close()
+        c=db(); candidates=c.execute("SELECT * FROM users WHERE role='parent'").fetchall(); c.close()
+        u=next((x for x in candidates if re.sub(r"\D", "", x["whatsapp"] or "") == whatsapp and x["password"] == password), None)
         if u:
             session["role"]="parent"; session["user_id"]=u["id"]
             return redirect(url_for("parent_home"))
