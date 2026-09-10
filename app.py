@@ -23,7 +23,8 @@ def init_db():
       role TEXT NOT NULL,
       name TEXT NOT NULL,
       whatsapp TEXT,
-      password TEXT
+      password TEXT,
+      dni TEXT
     );
     CREATE TABLE IF NOT EXISTS students(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,8 +89,8 @@ def init_db():
 
     # Demo accounts/data only. Replace/remove before production.
     if not c.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-        c.execute("INSERT INTO users(role,name,whatsapp,password) VALUES('coach','Entrenador','', '1234')")
-        p = c.execute("INSERT INTO users(role,name,whatsapp,password) VALUES('parent','Carlos Pérez','999999999','mateo123')").lastrowid
+        c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES('coach','Entrenador','', '1234', '')")
+        p = c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES('parent','Carlos Pérez','999999999','mateo123','12345678')").lastrowid
         s1 = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,age,zone,mode,place,tariff,photo_consent)
                           VALUES(?,?,?,?,?,?,?,?,?,?)""",
                        (p,"Carlos Pérez","999999999","Mateo Pérez",11,"San Borja","Parque","Parque de la Familia",60,"Sí")).lastrowid
@@ -185,6 +186,37 @@ def dashboard():
 def students():
     c=db(); rows=c.execute("SELECT * FROM students ORDER BY status DESC, student_name").fetchall(); c.close()
     return render_template("students.html",students=rows)
+
+@app.route("/entrenador/alumnos/nuevo", methods=["GET", "POST"])
+@coach_required
+def new_student():
+    if request.method == "POST":
+        parent_name = request.form["parent_name"].strip()
+        parent_whatsapp = request.form["parent_whatsapp"].strip()
+        student_name = request.form["student_name"].strip()
+        dni = request.form["dni"].strip()
+        if not parent_name or not parent_whatsapp or not student_name or not dni:
+            flash("Completa nombre, WhatsApp, alumno y DNI.")
+            return redirect(url_for("new_student"))
+        c = db()
+        u = c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=?", (parent_whatsapp,)).fetchone()
+        if u:
+            user_id = u["id"]
+            c.execute("UPDATE users SET name=?, password=?, dni=? WHERE id=?", (parent_name, dni, dni, user_id))
+        else:
+            user_id = c.execute(
+                "INSERT INTO users(role,name,whatsapp,password,dni) VALUES('parent',?,?,?,?,?)".replace("VALUES('parent',?,?,?,?,?)", "VALUES('parent',?,?,?,?)"),
+                (parent_name, parent_whatsapp, dni, dni)
+            ).lastrowid
+        c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,age,zone,mode,place,tariff,photo_consent)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                  (user_id,parent_name,parent_whatsapp,student_name,int(request.form["age"]),
+                   request.form["zone"],request.form["mode"],request.form["place"],
+                   float(request.form["tariff"]),request.form["photo_consent"]))
+        c.commit(); c.close()
+        flash("Alumno creado. Puede ingresar con su WhatsApp y DNI.")
+        return redirect(url_for("students"))
+    return render_template("new_student.html")
 
 @app.route("/entrenador/alumno/<int:sid>")
 @coach_required
