@@ -1,0 +1,11 @@
+{% extends "layout.html" %}{% block content %}<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"></header><main><a href="{{url_for('home')}}" class="back">← Inicio</a><h2>Entrenamiento personalizado de fútbol</h2>
+<div class="pricegrid"><div class="price"><b>3 años</b><br>30 minutos<span class="amount">S/ 50</span></div><div class="price"><b>4–5 años</b><br>45 minutos<span class="amount">S/ 60</span></div><div class="price"><b>Desde 6 años<br>hasta adultos</b><br>1 hora<span class="amount">S/ 70</span></div></div>
+<div class="notice">👥 ¿Entrenarán 2 o 3 alumnos juntos? Consulta por la tarifa especial.</div>
+<form method="post"><label>Padre/madre</label><input name="parent_name" required><label>WhatsApp</label><input name="whatsapp" required><label>Alumno</label><input name="student_name" required><label>Edad</label><input name="age" type="number" min="3" required>
+<label>Zona</label><select name="zone"><option>San Borja</option><option>Surco / Chacarilla</option><option>Miraflores</option><option>Barranco</option></select>
+<label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required>
+<div class="notice">🚗 <b>Tener en cuenta:</b> el lugar debe contar con un espacio permitido y seguro para dejar el auto durante la actividad.</div>
+<label>Horario disponible</label><select name="schedule"><option>Martes · 5:00 p. m.</option><option>Jueves · 5:00 p. m.</option><option>Sábado · 10:00 a. m.</option></select>
+<label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option></select>
+<button class="green">Enviar solicitud</button></form>
+<div class="notice">Si no encuentras un horario adecuado, puedes entrar a la lista de espera.</div><a href="{{url_for('espera')}}"><button class="light">🕐 Lista de espera</button></a></main>{% endblock %}
