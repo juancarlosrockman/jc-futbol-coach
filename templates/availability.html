@@ -5,6 +5,28 @@
 <a href="{{url_for('dashboard')}}" class="back">← Panel</a>
 
 <div class="card">
+<h2>Agregar horario disponible</h2>
+<p class="muted">Tú decides manualmente la zona, el día y la hora. Puedes escribir una zona nueva cuando quieras.</p>
+<form method="post">
+<label>Zona</label>
+<input name="zone" list="zonas" placeholder="Ej. Chorrillos" required autocomplete="off">
+<datalist id="zonas">
+{% for z in zones %}<option value="{{z}}">{% endfor %}
+</datalist>
+
+<label>Día</label>
+<select name="day" required>
+{% for d in days %}<option value="{{d}}">{{d}}</option>{% endfor %}
+</select>
+
+<label>Hora</label>
+<input name="time" type="time" required>
+
+<button class="green" type="submit">+ Agregar disponibilidad</button>
+</form>
+</div>
+
+<div class="card">
 <h2>Horarios publicados</h2>
 {% for a in availability %}
 <div class="row">
@@ -16,18 +38,6 @@
 {% else %}
 <p class="muted">No tienes horarios publicados. Agrega los que quieras ofrecer.</p>
 {% endfor %}
-</div>
-
-<div class="card">
-<h2>Agregar horario</h2>
-<form method="post">
-<label>Zona</label>
-<select name="zone" required>{% for z in zones %}<option>{{z}}</option>{% endfor %}</select>
-<label>Día</label>
-<select name="day" required>{% for d in days %}<option>{{d}}</option>{% endfor %}</select>
-<label>Hora</label><input name="time" type="time" required>
-<button class="green">+ Agregar disponibilidad</button>
-</form>
 </div>
 </main>
 {% endblock %}

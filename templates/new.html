@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% block content %}
-<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"></header>
+<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"><h2>JC Fútbol Coach</h2></header>
 <main>
 <a href="{{url_for('home')}}" class="back">← Inicio</a>
 <h2>Entrenamiento personalizado de fútbol</h2>
@@ -28,30 +28,49 @@
 <label>Edad</label><input name="age" type="number" min="3" required>
 
 <label>Zona</label>
-<select name="zone" required>
-{% for z in ['San Borja','Surco / Chacarilla','Barranco'] %}<option>{{z}}</option>{% endfor %}
+<select name="zone" id="zone" required onchange="filterSchedules()">
+<option value="">Selecciona una zona</option>
+{% for z in zones %}<option value="{{z}}">{{z}}</option>{% endfor %}
 </select>
 
 <label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
 <label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required>
 <div class="notice">🚗 <b>Tener en cuenta:</b> el lugar debe contar con un espacio permitido y seguro para dejar el auto durante la actividad.</div>
 
-<label>Horario disponible</label>
-<select name="schedule">
+<label>Horario disponible en la zona seleccionada</label>
+<select name="schedule" id="schedule">
+<option value="">Primero selecciona una zona</option>
 {% for a in availability %}
-<option>{{a.day}} · {{a.time}} · {{a.zone}}</option>
-{% else %}
-<option value="">No hay horarios publicados. Coordinar por WhatsApp.</option>
+<option value="{{a.day}} · {{a.time}} · {{a.zone}}" data-zone="{{a.zone}}">{{a.day}} · {{a.time}}</option>
 {% endfor %}
 </select>
 
 <label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option></select>
 
-<button class="green">💬 Solicitar por WhatsApp</button>
+<button class="green">💬 Coordinar con Coach Juan Carlos por WhatsApp</button>
 </form>
 
-<div class="notice">Al enviar, se abrirá WhatsApp con un mensaje preparado con estos datos. Tú solo tendrás que revisarlo y enviarlo.</div>
+<div class="notice">Al enviar, se abrirá WhatsApp con un mensaje preparado con estos datos. Solo tendrás que revisarlo y enviarlo.</div>
 <div class="notice">Si no encuentras un horario adecuado, puedes entrar a la lista de espera.</div>
 <a href="{{url_for('espera')}}"><button class="light">🕐 Lista de espera</button></a>
+
+<script>
+function filterSchedules() {
+  const zone = document.getElementById('zone').value;
+  const schedule = document.getElementById('schedule');
+  const options = Array.from(schedule.options);
+  options.forEach((opt, index) => {
+    if (index === 0) return;
+    opt.hidden = !zone || opt.dataset.zone !== zone;
+  });
+  schedule.value = '';
+  if (!zone) {
+    options[0].textContent = 'Primero selecciona una zona';
+  } else {
+    const available = options.slice(1).some(opt => !opt.hidden);
+    options[0].textContent = available ? 'Selecciona un horario' : 'No hay horarios publicados para esta zona';
+  }
+}
+</script>
 </main>
 {% endblock %}

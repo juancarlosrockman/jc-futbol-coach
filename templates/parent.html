@@ -1,1 +1,26 @@
-{% extends "layout.html" %}{% block content %}<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"><h2>JC Fútbol Coach</h2></header><main><p><b>Hola, {{s.parent_name}} 👋</b><br><span class="muted">Información de {{s.student_name}}</span></p><div class="card"><h2>Próximas clases</h2>{% for x in classes %}<div class="row"><span><b>{{x.date}} · {{x.time}}</b><br>{{x.place}}</span><span class="pill">{{x.status}}</span></div>{% endfor %}</div><div class="card"><h2>💰 Mis pagos</h2><div class="row">Tarifa <b>S/ {{s.tariff|int}}</b></div>{% for p in payments %}<div class="row"><span>{{p.month}}</span><b>S/ {{p.amount|int}}</b></div>{% endfor %}</div><div class="card"><h2>📸 Autorización</h2><div class="row">Fotos y videos <b>{{s.photo_consent}}</b></div></div><a href="{{url_for('logout')}}"><button class="dark">Cerrar sesión</button></a></main>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"><h2>JC Fútbol Coach</h2></header>
+<main>
+<p><b>Hola, {{s.parent_name}} 👋</b><br><span class="muted">Información de {{s.student_name}}</span></p>
+
+<div class="card">
+<h2>Próximas clases</h2>
+{% for x in classes %}
+<div class="row">
+<span><b>{{x.date}} · {{x.time}}</b><br>{{x.place}}</span>
+<span class="pill">{{x.status}}</span>
+</div>
+{% if x.status == 'scheduled' %}
+<a href="{{url_for('reschedule', class_id=x.id)}}"><button class="light" type="button">↻ Reprogramar esta clase</button></a>
+{% endif %}
+{% else %}
+<p class="muted">No tienes clases registradas.</p>
+{% endfor %}
+</div>
+
+<div class="card"><h2>💰 Mis pagos</h2><div class="row">Tarifa <b>S/ {{s.tariff|int}}</b></div>{% for p in payments %}<div class="row"><span>{{p.month}}</span><b>S/ {{p.amount|int}}</b></div>{% endfor %}</div>
+<div class="card"><h2>📸 Autorización</h2><div class="row">Fotos y videos <b>{{s.photo_consent}}</b></div></div>
+<a href="{{url_for('logout')}}"><button class="dark">Cerrar sesión</button></a>
+</main>
+{% endblock %}

@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 import os
 import re
 from urllib.parse import quote
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
@@ -28,8 +30,8 @@ PRICING = {
     ],
 }
 
-DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-PUBLIC_ZONES = ["San Borja", "Surco / Chacarilla", "Barranco"]
+DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+PERU_TZ = ZoneInfo("America/Lima")
 
 
 def db():
@@ -185,15 +187,13 @@ def nuevo():
         schedule = request.form.get("schedule", "").strip()
         photo_consent = request.form.get("photo_consent", "").strip()
 
-        if not parent_name or not whatsapp or not student_name or not age or not place:
+        if not parent_name or not whatsapp or not student_name or not age or not zone or not place:
             c.close()
             flash("Completa los datos obligatorios.")
             return redirect(url_for("nuevo"))
 
-        # La solicitud se coordina por WhatsApp. El registro completo del alumno
-        # lo hace el entrenador manualmente después de conversar con el padre/madre.
         message = (
-            "Hola JC, quiero solicitar un entrenamiento de fútbol.\n\n"
+            "Hola, Coach Juan Carlos. Quiero solicitar un entrenamiento de fútbol.\n\n"
             f"Padre/madre: {parent_name}\n"
             f"WhatsApp: {whatsapp}\n"
             f"Alumno: {student_name}\n"
@@ -214,10 +214,14 @@ def nuevo():
              WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6
              WHEN 'Domingo' THEN 7 ELSE 8 END, time, zone"""
     ).fetchall()
+    zones_rows = c.execute(
+        "SELECT DISTINCT zone FROM availability WHERE active=TRUE AND zone<>'' ORDER BY zone"
+    ).fetchall()
     c.close()
     return render_template(
         "new.html",
         availability=availability_rows,
+        zones=[z["zone"] for z in zones_rows],
         pricing=PRICING,
         coach_whatsapp=COACH_WHATSAPP,
     )
@@ -506,8 +510,9 @@ def availability():
              WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6
              WHEN 'Domingo' THEN 7 ELSE 8 END, time, zone"""
     ).fetchall()
+    zones = c.execute("SELECT DISTINCT zone FROM availability WHERE active=TRUE ORDER BY zone").fetchall()
     c.close()
-    return render_template("availability.html", availability=av, zones=PUBLIC_ZONES, days=DAYS)
+    return render_template("availability.html", availability=av, zones=[z["zone"] for z in zones], days=DAYS)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
@@ -626,6 +631,161 @@ def parent_home():
     ).fetchall()
     c.close()
     return render_template("parent.html", s=s, classes=classes, payments=payments)
+
+
+@app.route("/alumno/clase/<int:class_id>/reprogramar", methods=["GET", "POST"])
+def reschedule(class_id):
+    if session.get("role") != "parent":
+        return redirect(url_for("parent_login"))
+
+    c = db()
+    current = c.execute(
+        """SELECT classes.*, students.student_name, students.zone AS student_zone,
+                  students.parent_name, students.parent_whatsapp
+           FROM classes JOIN students ON students.id=classes.student_id
+           WHERE classes.id=%s AND students.user_id=%s""",
+        (class_id, session["user_id"]),
+    ).fetchone()
+
+    if not current:
+        c.close()
+        flash("Clase no encontrada.")
+        return redirect(url_for("parent_home"))
+
+    if request.method == "POST":
+        # Regla: solo se puede hacer una reprogramación directa hasta 2 horas antes.
+        try:
+            original_dt = datetime.strptime(
+                f"{current['date']} {current['time']}", "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=PERU_TZ)
+        except ValueError:
+            c.close()
+            flash("No se pudo validar la fecha de la clase. Comunícate con Coach Juan Carlos por WhatsApp.")
+            return redirect(url_for("parent_home"))
+
+        now = datetime.now(PERU_TZ)
+        if now >= original_dt - timedelta(hours=2):
+            c.close()
+            flash("La reprogramación directa está disponible hasta 2 horas antes de la clase. Si es una emergencia, comunícate con Coach Juan Carlos por WhatsApp.")
+            return redirect(url_for("contacto_whatsapp", mensaje="Hola, Coach Juan Carlos. Tengo una emergencia y necesito coordinar una reprogramación de clase."))
+
+        if current["status"] != "scheduled":
+            c.close()
+            flash("Esta clase ya no puede reprogramarse desde la aplicación. Comunícate con Coach Juan Carlos por WhatsApp.")
+            return redirect(url_for("contacto_whatsapp", mensaje="Hola, Coach Juan Carlos. Necesito coordinar una clase que ya no puedo reprogramar desde la aplicación."))
+
+        new_date = request.form.get("date", "").strip()
+        new_time = request.form.get("time", "").strip()
+        zone = (current["student_zone"] or "").strip()
+        if not new_date or not new_time or not zone:
+            c.close()
+            flash("Selecciona un horario disponible.")
+            return redirect(url_for("reschedule", class_id=class_id))
+
+        try:
+            selected = date.fromisoformat(new_date)
+            selected_day = DAYS[selected.weekday()]
+        except (ValueError, IndexError):
+            c.close()
+            flash("La fecha seleccionada no es válida.")
+            return redirect(url_for("reschedule", class_id=class_id))
+
+        today = datetime.now(PERU_TZ).date()
+        monday = today - timedelta(days=today.weekday())
+        if selected < today or selected > monday + timedelta(days=5):
+            c.close()
+            flash("Solo puedes elegir horarios disponibles de esta semana.")
+            return redirect(url_for("reschedule", class_id=class_id))
+
+        allowed = c.execute(
+            """SELECT 1 FROM availability
+               WHERE active=TRUE AND zone=%s AND day=%s AND time=%s LIMIT 1""",
+            (zone, selected_day, new_time),
+        ).fetchone()
+        if not allowed:
+            c.close()
+            flash("Ese horario ya no está disponible para tu zona.")
+            return redirect(url_for("reschedule", class_id=class_id))
+
+        # No mostrar/permitir un horario que ya esté ocupado por otra clase.
+        occupied = c.execute(
+            """SELECT 1 FROM classes
+               WHERE date=%s AND time=%s AND status='scheduled' AND id<>%s
+                 AND student_id IN (SELECT id FROM students WHERE zone=%s)
+               LIMIT 1""",
+            (new_date, new_time, class_id, zone),
+        ).fetchone()
+        if occupied:
+            c.close()
+            flash("Ese horario acaba de ser ocupado. Elige otro.")
+            return redirect(url_for("reschedule", class_id=class_id))
+
+        original_date = current["date"]
+        original_time = current["time"]
+        c.execute(
+            "UPDATE classes SET date=%s, time=%s WHERE id=%s AND student_id=%s",
+            (new_date, new_time, class_id, current["student_id"]),
+        )
+        c.commit()
+        c.close()
+
+        message = (
+            "⚽ Hola, Coach Juan Carlos.\n\n"
+            "Quisiera reprogramar la clase de mi hijo/a.\n\n"
+            f"Alumno: {current['student_name']}\n"
+            f"Zona: {zone}\n"
+            f"Reprograma clase del día {original_date}.\n"
+            f"Nueva fecha: {selected_day.lower()} {selected.day}.\n"
+            f"Nueva hora: {new_time}.\n\n"
+            "La solicitud fue realizada desde la aplicación de JC Fútbol Coach."
+        )
+        whatsapp_url = f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}"
+        return render_template(
+            "rescheduled.html",
+            current=current, original_date=original_date, original_time=original_time,
+            new_date=new_date, new_time=new_time, new_day=selected_day,
+            zone=zone, whatsapp_url=whatsapp_url,
+        )
+
+    av = c.execute(
+        """SELECT * FROM availability WHERE active=TRUE AND zone=%s
+           ORDER BY CASE day WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2
+             WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5
+             WHEN 'Sábado' THEN 6 ELSE 7 END, time""",
+        (current["student_zone"],),
+    ).fetchall()
+
+    today = datetime.now(PERU_TZ).date()
+    monday = today - timedelta(days=today.weekday())
+    slots = []
+    for a in av:
+        try:
+            idx = DAYS.index(a["day"])
+        except ValueError:
+            continue
+        d = monday + timedelta(days=idx)
+        if today <= d <= monday + timedelta(days=5):
+            # No mostrar el mismo horario de la clase que se está reprogramando.
+            if d.isoformat() == current["date"] and a["time"] == current["time"]:
+                continue
+            occupied = c.execute(
+                """SELECT 1 FROM classes
+                   WHERE date=%s AND time=%s AND status='scheduled' AND id<>%s
+                     AND student_id IN (SELECT id FROM students WHERE zone=%s)
+                   LIMIT 1""",
+                (d.isoformat(), a["time"], class_id, current["student_zone"]),
+            ).fetchone()
+            if occupied:
+                continue
+            slots.append({
+                "date": d.isoformat(),
+                "date_label": d.strftime("%d/%m"),
+                "day": a["day"],
+                "time": a["time"],
+                "zone": a["zone"],
+            })
+    c.close()
+    return render_template("reschedule.html", current=current, slots=slots)
 
 
 @app.route("/logout")

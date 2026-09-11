@@ -1,0 +1,33 @@
+{% extends "layout.html" %}
+{% block content %}
+<header><h2>↻ Reprogramar clase</h2></header>
+<main>
+<a href="{{url_for('parent_home')}}" class="back">← Volver</a>
+<div class="card">
+<p class="muted">Clase actual</p>
+<p><b>{{current.date}} · {{current.time}}</b><br>{{current.place}}</p>
+<p class="muted">Zona del alumno: <b>{{current.student_zone}}</b></p>
+</div>
+
+<div class="card">
+<h2>Horarios disponibles en {{current.student_zone}}</h2>
+<p class="muted">Solo se muestran los horarios que tú publicaste para esta zona y que todavía corresponden a esta semana.</p>
+<form method="post">
+{% for slot in slots %}
+<label class="option-card" style="display:block;cursor:pointer">
+<input type="radio" name="slot" value="{{slot.date}}|{{slot.time}}" required style="width:auto;margin-right:8px"
+       onchange="document.getElementById('slotDate').value='{{slot.date}}';document.getElementById('slotTime').value='{{slot.time}}'">
+<b>{{slot.day}} {{slot.date_label}} · {{slot.time}}</b><br>
+<span class="muted">{{slot.zone}}</span>
+</label>
+{% else %}
+<div class="notice">No hay horarios disponibles en {{current.student_zone}} para los días que quedan de esta semana.</div>
+{% endfor %}
+<input type="hidden" id="slotDate" name="date">
+<input type="hidden" id="slotTime" name="time">
+<input type="hidden" name="zone" value="{{current.student_zone}}">
+{% if slots %}<button class="green" type="submit">Confirmar reprogramación</button>{% endif %}
+</form>
+</div>
+</main>
+{% endblock %}
