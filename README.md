@@ -1,22 +1,25 @@
-# JC Fútbol Coach — primera web funcional
+# JC Fútbol Coach
 
-Esta versión ya usa una base de datos SQLite y sesiones de usuario.
+Versión web funcional para entrenamiento personalizado de fútbol.
 
-## Probar en una computadora
-1. Instala Python 3.
-2. Abre una terminal dentro de esta carpeta.
-3. Ejecuta: `pip install flask`
-4. Ejecuta: `python app.py`
-5. Abre: http://127.0.0.1:5000
+## Base de datos y Render
+La aplicación usa PostgreSQL mediante `DATABASE_URL`. En Render deben estar configuradas las variables de entorno necesarias para la aplicación, incluyendo `DATABASE_URL`, `SECRET_KEY`, `COACH_USER` y `COACH_PASSWORD`.
 
-## Accesos de demostración
-Entrenador:
-- Usuario: Entrenador
-- Contraseña: 1234
+## Flujo de alumno nuevo
+1. El interesado entra a “¿Eres nuevo? Solicita tu entrenamiento”.
+2. Completa los datos básicos y el horario de interés.
+3. Al enviar, se abre WhatsApp con un mensaje preparado para JC Fútbol Coach.
+4. La ficha completa del alumno se registra manualmente desde el panel del entrenador.
+5. El entrenador asigna manualmente la tarifa correspondiente y entrega al padre/madre sus credenciales.
 
-Alumno actual:
-- WhatsApp: 999999999
-- Contraseña: mateo123
+## Disponibilidad
+Los horarios publicados se guardan en PostgreSQL y pueden agregarse o eliminarse desde el panel del entrenador. Los horarios publicados se muestran en el formulario de alumno nuevo.
 
-## Importante
-Es una primera versión funcional para probar el flujo. Antes de publicarla en internet hay que cambiar las credenciales de demostración, la clave secreta y conectar un servicio de base de datos/hosting seguro.
+## Tarifas públicas
+- 3 años: 30 min — S/ 50
+- 4–5 años: 45 min — S/ 60
+- Desde 6 años hasta adultos: 1 hora — S/ 70
+- Plan 4 sesiones: S/ 280
+- Plan 8 sesiones: S/ 520
+
+Las tarifas de cada alumno se mantienen manuales desde su ficha.

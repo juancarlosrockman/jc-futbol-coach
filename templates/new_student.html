@@ -1,1 +1,21 @@
-{% extends "layout.html" %}{% block content %}<header><h2>➕ Nuevo alumno</h2><div class="muted">Crear acceso para el alumno actual</div></header><main><a href="{{url_for('students')}}" class="back">← Alumnos</a><div class="notice">El alumno ingresará con su número de <b>WhatsApp</b> y su <b>DNI</b> como contraseña.</div><form method="post"><label>Nombre del padre/madre</label><input name="parent_name" required><label>WhatsApp del padre/madre</label><input name="parent_whatsapp" inputmode="numeric" required><label>Nombre del alumno</label><input name="student_name" required><label>DNI (será la contraseña inicial)</label><input name="dni" inputmode="numeric" required><label>Edad</label><input name="age" type="number" min="3" max="99" required><label>Zona</label><input name="zone" placeholder="Ej. San Borja"><label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Lugar</label><input name="place" required><label>Tarifa</label><input name="tariff" type="number" min="0" step="1" value="70" required><label>Fotos y videos</label><select name="photo_consent"><option>No</option><option>Sí</option></select><button class="green">Guardar alumno</button></form></main>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<header><h2>➕ Registrar alumno</h2></header>
+<main>
+<a href="{{url_for('students')}}" class="back">← Alumnos</a>
+<div class="notice">Los alumnos actuales los registras tú manualmente. Aquí puedes asignar la tarifa que corresponda a cada caso.</div>
+<form method="post">
+<label>Padre/madre</label><input name="parent_name" required>
+<label>WhatsApp</label><input name="parent_whatsapp" required>
+<label>Alumno</label><input name="student_name" required>
+<label>DNI del alumno</label><input name="dni" required>
+<label>Edad</label><input name="age" type="number" min="3" required>
+<label>Zona</label><select name="zone"><option>San Borja</option><option>Surco / Chacarilla</option><option>Barranco</option></select>
+<label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
+<label>Parque o dirección</label><input name="place" required>
+<label>Tarifa por sesión (S/)</label><input name="tariff" type="number" min="0" step="0.01" required>
+<label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option></select>
+<button class="green">Guardar alumno</button>
+</form>
+</main>
+{% endblock %}

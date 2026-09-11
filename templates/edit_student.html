@@ -1,1 +1,20 @@
-{% extends "layout.html" %}{% block content %}<header><h2>✏️ Editar alumno</h2></header><main><a href="{{url_for('student_detail',sid=s.id)}}" class="back">← Ficha</a><div class="notice">Actualiza el DNI para habilitar el acceso con WhatsApp + DNI.</div><form method="post"><label>Nombre del padre/madre</label><input name="parent_name" value="{{s.parent_name}}" required><label>WhatsApp del padre/madre</label><input name="parent_whatsapp" value="{{s.parent_whatsapp}}" inputmode="numeric" required><label>Nombre del alumno</label><input name="student_name" value="{{s.student_name}}" required><label>DNI (contraseña inicial)</label><input name="dni" value="{{s.dni or ''}}" inputmode="numeric" required><label>Edad</label><input name="age" type="number" min="3" max="99" value="{{s.age}}" required><label>Zona</label><input name="zone" value="{{s.zone or ''}}"><label>Modalidad</label><select name="mode"><option {% if s.mode=='Parque' %}selected{% endif %}>Parque</option><option {% if s.mode=='Domicilio' %}selected{% endif %}>Domicilio</option></select><label>Lugar</label><input name="place" value="{{s.place or ''}}" required><label>Tarifa</label><input name="tariff" type="number" min="0" step="1" value="{{'%.0f'|format(s.tariff)}}" required><label>Fotos y videos</label><select name="photo_consent"><option {% if s.photo_consent=='No' %}selected{% endif %}>No</option><option {% if s.photo_consent=='Sí' %}selected{% endif %}>Sí</option></select><button class="green">Guardar cambios</button></form></main>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<header><h2>✏️ Editar alumno</h2></header>
+<main>
+<a href="{{url_for('student_detail',sid=s.id)}}" class="back">← Ficha</a>
+<form method="post">
+<label>Padre/madre</label><input name="parent_name" value="{{s.parent_name}}" required>
+<label>WhatsApp</label><input name="parent_whatsapp" value="{{s.parent_whatsapp}}" required>
+<label>Alumno</label><input name="student_name" value="{{s.student_name}}" required>
+<label>DNI del alumno</label><input name="dni" value="{{s.dni or ''}}" required>
+<label>Edad</label><input name="age" type="number" min="3" value="{{s.age}}" required>
+<label>Zona</label><select name="zone"><option {% if s.zone=='San Borja' %}selected{% endif %}>San Borja</option><option {% if s.zone=='Surco / Chacarilla' %}selected{% endif %}>Surco / Chacarilla</option><option {% if s.zone=='Barranco' %}selected{% endif %}>Barranco</option></select>
+<label>Modalidad</label><select name="mode"><option {% if s.mode=='Parque' %}selected{% endif %}>Parque</option><option {% if s.mode=='Domicilio' %}selected{% endif %}>Domicilio</option></select>
+<label>Parque o dirección</label><input name="place" value="{{s.place or ''}}" required>
+<label>Tarifa por sesión (S/)</label><input name="tariff" type="number" min="0" step="0.01" value="{{s.tariff}}" required>
+<label>Fotos y videos</label><select name="photo_consent"><option {% if s.photo_consent=='Sí, autorizo' %}selected{% endif %}>Sí, autorizo</option><option {% if s.photo_consent=='No, no autorizo' %}selected{% endif %}>No, no autorizo</option></select>
+<button class="green">Guardar cambios</button>
+</form>
+</main>
+{% endblock %}

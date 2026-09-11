@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import os
 import re
+from urllib.parse import quote
 from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
@@ -9,6 +10,26 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-this")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# WhatsApp de JC Fútbol Coach para solicitudes y contacto.
+COACH_WHATSAPP = "51993757225"
+
+# Tarifas públicas para alumnos nuevos.
+# La tarifa real de cada alumno se asigna y modifica manualmente desde el panel.
+PRICING = {
+    "new_students": [
+        {"age": "3 años", "duration": "30 min", "price": "S/ 50"},
+        {"age": "4–5 años", "duration": "45 min", "price": "S/ 60"},
+        {"age": "Desde 6 años hasta adultos", "duration": "1 hora", "price": "S/ 70"},
+    ],
+    "plans": [
+        {"sessions": "4 sesiones", "price": "S/ 280"},
+        {"sessions": "8 sesiones", "price": "S/ 520"},
+    ],
+}
+
+DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+PUBLIC_ZONES = ["San Borja", "Surco / Chacarilla", "Barranco"]
 
 
 def db():
@@ -99,33 +120,36 @@ def init_db():
       notes TEXT
     )
     """)
+    # Disponibilidad permanente del negocio. Ya no se guarda en session.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS availability(
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      zone TEXT NOT NULL,
+      day TEXT NOT NULL,
+      time TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE
+    )
+    """)
     c.commit()
 
-    # Compatibility with tables created by earlier versions.
-    c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS dni TEXT")
-    c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS dni TEXT")
-    c.commit()
-
-    # Create or synchronize the coach account.
-    # Render environment variables can override these MVP credentials later.
-    coach_user = os.environ.get("COACH_USER", "Entrenador").strip()
-    coach_password = os.environ.get("COACH_PASSWORD", "JCFC2026").strip()
-
-    existing = c.execute(
-        "SELECT id FROM users WHERE role='coach' AND name=%s", (coach_user,)
-    ).fetchone()
-
-    if existing:
-        c.execute(
-            "UPDATE users SET password=%s WHERE id=%s",
-            (coach_password, existing["id"]),
-        )
-    else:
-        c.execute(
-            "INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s)",
-            ("coach", coach_user, "", coach_password, ""),
-        )
-    c.commit()
+    # Cuenta del entrenador administrada por variables de entorno de Render.
+    coach_user = os.environ.get("COACH_USER", "").strip()
+    coach_password = os.environ.get("COACH_PASSWORD", "").strip()
+    if coach_user and coach_password:
+        existing = c.execute(
+            "SELECT id FROM users WHERE role='coach' AND name=%s", (coach_user,)
+        ).fetchone()
+        if existing:
+            c.execute(
+                "UPDATE users SET password=%s WHERE id=%s",
+                (coach_password, existing["id"]),
+            )
+        else:
+            c.execute(
+                "INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s)",
+                ("coach", coach_user, "", coach_password, ""),
+            )
+        c.commit()
     c.close()
 
 
@@ -138,6 +162,10 @@ def coach_required(f):
     return w
 
 
+def normalize_whatsapp(value):
+    return re.sub(r"\D", "", value or "")
+
+
 @app.route("/")
 def home():
     return render_template("home.html")
@@ -145,14 +173,54 @@ def home():
 
 @app.route("/nuevo", methods=["GET", "POST"])
 def nuevo():
+    c = db()
     if request.method == "POST":
-        mode = request.form["mode"]
-        place = request.form["place"]
-        if not place.strip():
-            flash("Indica el parque o la dirección.")
+        parent_name = request.form.get("parent_name", "").strip()
+        whatsapp = request.form.get("whatsapp", "").strip()
+        student_name = request.form.get("student_name", "").strip()
+        age = request.form.get("age", "").strip()
+        zone = request.form.get("zone", "").strip()
+        mode = request.form.get("mode", "").strip()
+        place = request.form.get("place", "").strip()
+        schedule = request.form.get("schedule", "").strip()
+        photo_consent = request.form.get("photo_consent", "").strip()
+
+        if not parent_name or not whatsapp or not student_name or not age or not place:
+            c.close()
+            flash("Completa los datos obligatorios.")
             return redirect(url_for("nuevo"))
-        return redirect(url_for("solicitud_recibida"))
-    return render_template("new.html")
+
+        # La solicitud se coordina por WhatsApp. El registro completo del alumno
+        # lo hace el entrenador manualmente después de conversar con el padre/madre.
+        message = (
+            "Hola JC, quiero solicitar un entrenamiento de fútbol.\n\n"
+            f"Padre/madre: {parent_name}\n"
+            f"WhatsApp: {whatsapp}\n"
+            f"Alumno: {student_name}\n"
+            f"Edad: {age}\n"
+            f"Zona: {zone}\n"
+            f"Modalidad: {mode}\n"
+            f"Parque o dirección: {place}\n"
+            f"Horario de interés: {schedule or 'Por coordinar'}\n"
+            f"Fotos/videos: {photo_consent or 'Por coordinar'}"
+        )
+        c.close()
+        return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
+
+    availability_rows = c.execute(
+        """SELECT * FROM availability WHERE active=TRUE
+           ORDER BY CASE day
+             WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3
+             WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6
+             WHEN 'Domingo' THEN 7 ELSE 8 END, time, zone"""
+    ).fetchall()
+    c.close()
+    return render_template(
+        "new.html",
+        availability=availability_rows,
+        pricing=PRICING,
+        coach_whatsapp=COACH_WHATSAPP,
+    )
 
 
 @app.route("/espera", methods=["GET", "POST"])
@@ -197,6 +265,14 @@ def equipo():
 @app.route("/recibida")
 def solicitud_recibida():
     return render_template("received.html")
+
+
+@app.route("/contacto-whatsapp")
+def contacto_whatsapp():
+    message = request.args.get(
+        "mensaje", "Hola JC, quisiera consultar por las clases de fútbol personalizadas."
+    )
+    return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
 
 
 @app.route("/entrenador/login", methods=["GET", "POST"])
@@ -246,7 +322,7 @@ def students():
 def new_student():
     if request.method == "POST":
         parent_name = request.form["parent_name"].strip()
-        parent_whatsapp = re.sub(r"\D", "", request.form["parent_whatsapp"])
+        parent_whatsapp = request.form["parent_whatsapp"].strip()
         student_name = request.form["student_name"].strip()
         dni = request.form["dni"].strip()
         if not parent_name or not parent_whatsapp or not student_name or not dni:
@@ -259,8 +335,8 @@ def new_student():
         if u:
             user_id = u["id"]
             c.execute(
-                "UPDATE users SET name=%s, dni=%s WHERE id=%s",
-                (parent_name, dni, user_id),
+                "UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s",
+                (parent_name, dni, dni, user_id),
             )
         else:
             user_id = c.execute(
@@ -295,7 +371,7 @@ def edit_student(sid):
         return redirect(url_for("students"))
     if request.method == "POST":
         parent_name = request.form["parent_name"].strip()
-        parent_whatsapp = re.sub(r"\D", "", request.form["parent_whatsapp"])
+        parent_whatsapp = request.form["parent_whatsapp"].strip()
         student_name = request.form["student_name"].strip()
         dni = request.form["dni"].strip()
         if not parent_name or not parent_whatsapp or not student_name or not dni:
@@ -308,8 +384,8 @@ def edit_student(sid):
         if u:
             user_id = u["id"]
             c.execute(
-                "UPDATE users SET name=%s, dni=%s WHERE id=%s",
-                (parent_name, dni, user_id),
+                "UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s",
+                (parent_name, dni, dni, user_id),
             )
         else:
             user_id = c.execute(
@@ -405,16 +481,44 @@ def payments():
 @app.route("/entrenador/disponibilidad", methods=["GET", "POST"])
 @coach_required
 def availability():
-    # Simple first version: availability is stored in the session list.
-    av = session.get("availability", [
-        {"zone": "San Borja", "day": "Martes", "time": "17:00"},
-        {"zone": "San Borja", "day": "Jueves", "time": "17:00"},
-        {"zone": "Surco / Chacarilla", "day": "Sábado", "time": "10:00"},
-    ])
+    c = db()
     if request.method == "POST":
-        av.append({"zone": request.form["zone"], "day": request.form["day"], "time": request.form["time"]})
-        session["availability"] = av
-    return render_template("availability.html", availability=av)
+        zone = request.form.get("zone", "").strip()
+        day = request.form.get("day", "").strip()
+        time = request.form.get("time", "").strip()
+        if not zone or not day or not time:
+            c.close()
+            flash("Completa zona, día y hora.")
+            return redirect(url_for("availability"))
+        c.execute(
+            "INSERT INTO availability(zone,day,time,active) VALUES(%s,%s,%s,TRUE)",
+            (zone, day, time),
+        )
+        c.commit()
+        c.close()
+        flash("Disponibilidad agregada.")
+        return redirect(url_for("availability"))
+
+    av = c.execute(
+        """SELECT * FROM availability WHERE active=TRUE
+           ORDER BY CASE day
+             WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3
+             WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6
+             WHEN 'Domingo' THEN 7 ELSE 8 END, time, zone"""
+    ).fetchall()
+    c.close()
+    return render_template("availability.html", availability=av, zones=PUBLIC_ZONES, days=DAYS)
+
+
+@app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
+@coach_required
+def delete_availability(availability_id):
+    c = db()
+    c.execute("DELETE FROM availability WHERE id=%s", (availability_id,))
+    c.commit()
+    c.close()
+    flash("Disponibilidad eliminada.")
+    return redirect(url_for("availability"))
 
 
 @app.route("/entrenador/espera")
@@ -452,13 +556,13 @@ def teams():
 @app.route("/alumno/login", methods=["GET", "POST"])
 def parent_login():
     if request.method == "POST":
-        whatsapp = re.sub(r"\D", "", request.form.get("whatsapp", ""))
+        whatsapp = normalize_whatsapp(request.form.get("whatsapp", ""))
         password = request.form.get("password", "").strip()
         c = db()
         candidates = c.execute("SELECT * FROM users WHERE role='parent'").fetchall()
         c.close()
         u = next(
-            (x for x in candidates if re.sub(r"\D", "", x["whatsapp"] or "") == whatsapp and x["password"] == password),
+            (x for x in candidates if normalize_whatsapp(x["whatsapp"]) == whatsapp and x["password"] == password),
             None,
         )
         if u:
@@ -532,7 +636,11 @@ def logout():
 
 @app.context_processor
 def globals():
-    return {"app_name": "JC Fútbol Coach"}
+    return {
+        "app_name": "JC Fútbol Coach",
+        "coach_whatsapp": COACH_WHATSAPP,
+        "pricing": PRICING,
+    }
 
 
 # Render/Gunicorn imports this module; initialize the database when the app starts.

@@ -1,3 +1,21 @@
-{% extends "layout.html" %}{% block content %}<header><h2>👤 Ficha del alumno</h2></header><main><a href="{{url_for('students')}}" class="back">← Alumnos</a><div class="card"><h2>{{s.student_name}}</h2><span class="pill">{{'Alumno antiguo · Tarifa preferencial' if s.tariff < 70 else 'Alumno nuevo'}}</span><div class="row">Edad <b>{{s.age}}</b></div><div class="row">Padre/madre <b>{{s.parent_name}}</b></div><div class="row">WhatsApp <b>{{s.parent_whatsapp}}</b></div><div class="row">DNI <b>{{s.dni or 'No registrado'}}</b></div><div class="row">Zona <b>{{s.zone}}</b></div><div class="row">Modalidad <b>{{s.mode}}</b></div><div class="row">Lugar habitual <b>{{s.place}}</b></div><div class="row">Tarifa <b>S/ {{'%.0f'|format(s.tariff)}} por sesión</b></div><div class="row">Fotos/videos <b>{{s.photo_consent}}</b></div></div>
-<a href="{{url_for('edit_student',sid=s.id)}}"><button class="green">✏️ Editar alumno</button></a><div class="card"><h2>⚽ Clases</h2>{% for x in classes %}<div class="row"><span>{{x.date}} · {{x.time}}<br><span class="muted">{{x.place}}</span></span><span class="pill">{{x.status}}</span></div>{% else %}<p class="muted">No hay clases registradas.</p>{% endfor %}</div>
-<div class="card"><h2>💰 Pagos</h2>{% for p in payments %}<div class="row"><span>{{p.month}} · {{p.method}}</span><b>S/ {{'%.2f'|format(p.amount)}}</b></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}</div></main>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<header><h2>👤 Ficha del alumno</h2></header>
+<main>
+<a href="{{url_for('students')}}" class="back">← Alumnos</a>
+<div class="card">
+<h2>{{s.student_name}}</h2>
+<div class="row">Edad <b>{{s.age}}</b></div>
+<div class="row">Padre/madre <b>{{s.parent_name}}</b></div>
+<div class="row">WhatsApp <b>{{s.parent_whatsapp}}</b></div>
+<div class="row">Zona <b>{{s.zone}}</b></div>
+<div class="row">Modalidad <b>{{s.mode}}</b></div>
+<div class="row">Lugar habitual <b>{{s.place}}</b></div>
+<div class="row">Tarifa <b>S/ {{'%.0f'|format(s.tariff)}} por sesión</b></div>
+<div class="row">Fotos/videos <b>{{s.photo_consent}}</b></div>
+<a href="{{url_for('edit_student',sid=s.id)}}"><button class="light">Editar ficha</button></a>
+</div>
+<div class="card"><h2>⚽ Clases</h2>{% for x in classes %}<div class="row"><span>{{x.date}} · {{x.time}}<br><span class="muted">{{x.place}}</span></span><span class="pill">{{x.status}}</span></div>{% else %}<p class="muted">No hay clases registradas.</p>{% endfor %}</div>
+<div class="card"><h2>💰 Pagos</h2>{% for p in payments %}<div class="row"><span>{{p.month}} · {{p.method}}</span><b>S/ {{'%.2f'|format(p.amount)}}</b></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}</div>
+</main>
+{% endblock %}

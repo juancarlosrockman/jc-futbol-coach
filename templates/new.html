@@ -1,11 +1,57 @@
-{% extends "layout.html" %}{% block content %}<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"></header><main><a href="{{url_for('home')}}" class="back">← Inicio</a><h2>Entrenamiento personalizado de fútbol</h2>
-<div class="pricegrid"><div class="price"><b>3 años</b><br>30 minutos<span class="amount">S/ 50</span></div><div class="price"><b>4–5 años</b><br>45 minutos<span class="amount">S/ 60</span></div><div class="price"><b>Desde 6 años<br>hasta adultos</b><br>1 hora<span class="amount">S/ 70</span></div></div>
-<div class="notice">👥 ¿Entrenarán 2 o 3 alumnos juntos? Consulta por la tarifa especial.</div>
-<form method="post"><label>Padre/madre</label><input name="parent_name" required><label>WhatsApp</label><input name="whatsapp" required><label>Alumno</label><input name="student_name" required><label>Edad</label><input name="age" type="number" min="3" required>
-<label>Zona</label><select name="zone"><option>San Borja</option><option>Surco / Chacarilla</option><option>Miraflores</option><option>Barranco</option></select>
-<label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required>
+{% extends "layout.html" %}
+{% block content %}
+<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"></header>
+<main>
+<a href="{{url_for('home')}}" class="back">← Inicio</a>
+<h2>Entrenamiento personalizado de fútbol</h2>
+
+<div class="pricegrid">
+{% for p in pricing.new_students %}
+<div class="price"><b>{{p.age}}</b><br>{{p.duration}}<span class="amount">{{p.price}}</span></div>
+{% endfor %}
+</div>
+
+<div class="card">
+<h2>📦 Planes de entrenamiento</h2>
+<p class="muted">Para alumnos desde 6 años.</p>
+{% for p in pricing.plans %}
+<div class="row"><span><b>{{p.sessions}}</b></span><b>{{p.price}}</b></div>
+{% endfor %}
+</div>
+
+<div class="notice">👥 El entrenamiento es personalizado. Si deseas consultar por una sesión para 2 o 3 alumnos juntos, escríbeme por WhatsApp.</div>
+
+<form method="post">
+<label>Padre/madre</label><input name="parent_name" required>
+<label>WhatsApp</label><input name="whatsapp" required placeholder="Ej. 993757225">
+<label>Alumno</label><input name="student_name" required>
+<label>Edad</label><input name="age" type="number" min="3" required>
+
+<label>Zona</label>
+<select name="zone" required>
+{% for z in ['San Borja','Surco / Chacarilla','Barranco'] %}<option>{{z}}</option>{% endfor %}
+</select>
+
+<label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
+<label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required>
 <div class="notice">🚗 <b>Tener en cuenta:</b> el lugar debe contar con un espacio permitido y seguro para dejar el auto durante la actividad.</div>
-<label>Horario disponible</label><select name="schedule"><option>Martes · 5:00 p. m.</option><option>Jueves · 5:00 p. m.</option><option>Sábado · 10:00 a. m.</option></select>
+
+<label>Horario disponible</label>
+<select name="schedule">
+{% for a in availability %}
+<option>{{a.day}} · {{a.time}} · {{a.zone}}</option>
+{% else %}
+<option value="">No hay horarios publicados. Coordinar por WhatsApp.</option>
+{% endfor %}
+</select>
+
 <label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option></select>
-<button class="green">Enviar solicitud</button></form>
-<div class="notice">Si no encuentras un horario adecuado, puedes entrar a la lista de espera.</div><a href="{{url_for('espera')}}"><button class="light">🕐 Lista de espera</button></a></main>{% endblock %}
+
+<button class="green">💬 Solicitar por WhatsApp</button>
+</form>
+
+<div class="notice">Al enviar, se abrirá WhatsApp con un mensaje preparado con estos datos. Tú solo tendrás que revisarlo y enviarlo.</div>
+<div class="notice">Si no encuentras un horario adecuado, puedes entrar a la lista de espera.</div>
+<a href="{{url_for('espera')}}"><button class="light">🕐 Lista de espera</button></a>
+</main>
+{% endblock %}

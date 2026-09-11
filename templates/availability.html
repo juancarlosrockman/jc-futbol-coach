@@ -1,1 +1,33 @@
-{% extends "layout.html" %}{% block content %}<header><h2>🕐 Disponibilidad</h2></header><main><a href="{{url_for('dashboard')}}" class="back">← Panel</a><div class="card">{% for a in availability %}<div class="row"><span>{{a.zone}} · {{a.day}}</span><b>{{a.time}}</b></div>{% endfor %}</div><div class="card"><h2>Agregar horario</h2><form method="post"><label>Zona</label><input name="zone" required><label>Día</label><select name="day"><option>Lunes</option><option>Martes</option><option>Miércoles</option><option>Jueves</option><option>Viernes</option><option>Sábado</option><option>Domingo</option></select><label>Hora</label><input name="time" type="time" required><button class="green">+ Agregar disponibilidad</button></form></div></main>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<header><h2>🕐 Disponibilidad</h2></header>
+<main>
+<a href="{{url_for('dashboard')}}" class="back">← Panel</a>
+
+<div class="card">
+<h2>Horarios publicados</h2>
+{% for a in availability %}
+<div class="row">
+<span><b>{{a.zone}}</b><br><span class="muted">{{a.day}} · {{a.time}}</span></span>
+<form method="post" action="{{url_for('delete_availability', availability_id=a.id)}}" style="margin:0">
+<button type="submit" class="light" onclick="return confirm('¿Eliminar este horario?')">Eliminar</button>
+</form>
+</div>
+{% else %}
+<p class="muted">No tienes horarios publicados. Agrega los que quieras ofrecer.</p>
+{% endfor %}
+</div>
+
+<div class="card">
+<h2>Agregar horario</h2>
+<form method="post">
+<label>Zona</label>
+<select name="zone" required>{% for z in zones %}<option>{{z}}</option>{% endfor %}</select>
+<label>Día</label>
+<select name="day" required>{% for d in days %}<option>{{d}}</option>{% endfor %}</select>
+<label>Hora</label><input name="time" type="time" required>
+<button class="green">+ Agregar disponibilidad</button>
+</form>
+</div>
+</main>
+{% endblock %}
