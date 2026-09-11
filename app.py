@@ -101,20 +101,31 @@ def init_db():
     """)
     c.commit()
 
-    # Create the coach account only when credentials are supplied as environment variables.
-    # This avoids putting a production password in the source code.
-    coach_user = os.environ.get("COACH_USER")
-    coach_password = os.environ.get("COACH_PASSWORD")
-    if coach_user and coach_password:
-        existing = c.execute(
-            "SELECT id FROM users WHERE role='coach' AND name=%s", (coach_user,)
-        ).fetchone()
-        if not existing:
-            c.execute(
-                "INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s)",
-                ("coach", coach_user, "", coach_password, ""),
-            )
-            c.commit()
+    # Compatibility with tables created by earlier versions.
+    c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS dni TEXT")
+    c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS dni TEXT")
+    c.commit()
+
+    # Create or synchronize the coach account.
+    # Render environment variables can override these MVP credentials later.
+    coach_user = os.environ.get("COACH_USER", "Entrenador").strip()
+    coach_password = os.environ.get("COACH_PASSWORD", "JCFC2026").strip()
+
+    existing = c.execute(
+        "SELECT id FROM users WHERE role='coach' AND name=%s", (coach_user,)
+    ).fetchone()
+
+    if existing:
+        c.execute(
+            "UPDATE users SET password=%s WHERE id=%s",
+            (coach_password, existing["id"]),
+        )
+    else:
+        c.execute(
+            "INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s)",
+            ("coach", coach_user, "", coach_password, ""),
+        )
+    c.commit()
     c.close()
 
 
@@ -235,7 +246,7 @@ def students():
 def new_student():
     if request.method == "POST":
         parent_name = request.form["parent_name"].strip()
-        parent_whatsapp = request.form["parent_whatsapp"].strip()
+        parent_whatsapp = re.sub(r"\D", "", request.form["parent_whatsapp"])
         student_name = request.form["student_name"].strip()
         dni = request.form["dni"].strip()
         if not parent_name or not parent_whatsapp or not student_name or not dni:
@@ -248,8 +259,8 @@ def new_student():
         if u:
             user_id = u["id"]
             c.execute(
-                "UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s",
-                (parent_name, dni, dni, user_id),
+                "UPDATE users SET name=%s, dni=%s WHERE id=%s",
+                (parent_name, dni, user_id),
             )
         else:
             user_id = c.execute(
@@ -284,7 +295,7 @@ def edit_student(sid):
         return redirect(url_for("students"))
     if request.method == "POST":
         parent_name = request.form["parent_name"].strip()
-        parent_whatsapp = request.form["parent_whatsapp"].strip()
+        parent_whatsapp = re.sub(r"\D", "", request.form["parent_whatsapp"])
         student_name = request.form["student_name"].strip()
         dni = request.form["dni"].strip()
         if not parent_name or not parent_whatsapp or not student_name or not dni:
@@ -297,8 +308,8 @@ def edit_student(sid):
         if u:
             user_id = u["id"]
             c.execute(
-                "UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s",
-                (parent_name, dni, dni, user_id),
+                "UPDATE users SET name=%s, dni=%s WHERE id=%s",
+                (parent_name, dni, user_id),
             )
         else:
             user_id = c.execute(
