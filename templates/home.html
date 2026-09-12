@@ -1,10 +1,1 @@
-{% extends "layout.html" %}{% block content %}<section class="hero">
-<img class="logo" src="{{url_for('static',filename='logo.webp')}}">
-<h1>ENTRENAMIENTO PERSONALIZADO DE FÚTBOL</h1><p class="muted">Técnica · Táctica · Coordinación · Valores</p>
-<div class="card">
-<a href="{{url_for('nuevo')}}"><button class="green">⚽ ¿Eres nuevo?<br><small>Solicita tu entrenamiento</small></button></a>
-<a href="{{url_for('parent_login')}}"><button class="light">🔐 Alumno actual — Ingresar</button></a>
-</div>
-<div class="card"><h2>¿Quieres un servicio?</h2><p class="muted">Entrenamientos para equipos y demás eventos.</p><a href="{{url_for('equipo')}}"><button class="light">🏆 Solicitar servicio para equipo/evento</button></a></div>
-<a class="secret" href="{{url_for('coach_login')}}">⚙️ Acceso del entrenador</a>
-</section>{% endblock %}
+{% extends "layout.html" %}{% block content %}<div class="card homehero"><h1>JC Fútbol Coach</h1><p class="muted">Entrenamiento personalizado de fútbol para todas las edades.</p><div class="actions" style="justify-content:center"><a class="btn green" href="{{url_for('nuevo')}}">Solicitar clase</a><a class="btn light" href="{{url_for('parent_login')}}">Acceso de alumno</a><a class="btn light" href="{{url_for('coach_login')}}">Acceso Coach Juan Carlos</a></div></div><div class="grid3"><div class="card"><h3>⚽ Personalizado</h3><p class="muted">Trabajo individual adaptado al alumno.</p></div><div class="card"><h3>📍 Donde lo necesites</h3><p class="muted">Parques o domicilio según coordinación.</p></div><div class="card"><h3>🏆 Formación</h3><p class="muted">Coordinación, recepción, pase y control orientado.</p></div></div>{% endblock %}

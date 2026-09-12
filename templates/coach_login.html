@@ -1,13 +1,1 @@
-{% extends "layout.html" %}
-{% block content %}
-<header><img class="logo" src="{{url_for('static',filename='logo.webp')}}"><h2>⚙️ Acceso del entrenador</h2></header>
-<main>
-{% with msgs=get_flashed_messages() %}{% for m in msgs %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}
-<form method="post">
-<label>Usuario</label><input name="user" value="Entrenador" required>
-<label>Contraseña</label><input name="password" type="password" required>
-<button class="green">Ingresar al panel</button>
-</form>
-<a href="{{url_for('home')}}"><button class="light">Volver</button></a>
-</main>
-{% endblock %}
+{% extends "layout.html" %}{% block content %}<div class="card" style="max-width:430px;margin:60px auto"><h2>Acceso Coach Juan Carlos</h2><p class="muted">Ingresa con tus credenciales.</p><form method="post"><label>Usuario</label><input name="user" required><label>Contraseña</label><input name="password" type="password" required><button class="btn green">Ingresar</button></form></div>{% endblock %}
