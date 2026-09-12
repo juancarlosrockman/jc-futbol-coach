@@ -324,44 +324,101 @@ def students():
 @app.route("/entrenador/alumnos/nuevo", methods=["GET", "POST"])
 @coach_required
 def new_student():
+    c = db()
     if request.method == "POST":
-        parent_name = request.form["parent_name"].strip()
-        parent_whatsapp = request.form["parent_whatsapp"].strip()
-        student_name = request.form["student_name"].strip()
-        dni = request.form["dni"].strip()
-        if not parent_name or not parent_whatsapp or not student_name or not dni:
-            flash("Completa nombre, WhatsApp, alumno y DNI.")
+        parent_name = request.form.get("parent_name", "").strip()
+        parent_whatsapp = request.form.get("parent_whatsapp", "").strip()
+        student_name = request.form.get("student_name", "").strip()
+        dni = request.form.get("dni", "").strip()
+        zone = request.form.get("zone", "").strip()
+        mode = request.form.get("mode", "").strip()
+        place = request.form.get("place", "").strip()
+        photo_consent = request.form.get("photo_consent", "No").strip()
+        if not parent_name or not parent_whatsapp or not student_name or not dni or not zone or not place:
+            c.close()
+            flash("Completa nombre, WhatsApp, alumno, DNI, zona y lugar.")
             return redirect(url_for("new_student"))
-        c = db()
-        u = c.execute(
-            "SELECT * FROM users WHERE role='parent' AND whatsapp=%s", (parent_whatsapp,)
-        ).fetchone()
-        if u:
-            user_id = u["id"]
-            c.execute(
-                "UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s",
-                (parent_name, dni, dni, user_id),
-            )
-        else:
-            user_id = c.execute(
-                """INSERT INTO users(role,name,whatsapp,password,dni)
-                   VALUES(%s,%s,%s,%s,%s) RETURNING id""",
-                ("parent", parent_name, parent_whatsapp, dni, dni),
+        try:
+            age = int(request.form.get("age", "0"))
+            tariff = float(request.form.get("tariff", "0"))
+        except (ValueError, TypeError):
+            c.close()
+            flash("Edad y tarifa deben ser válidas.")
+            return redirect(url_for("new_student"))
+
+        try:
+            u = c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=%s", (parent_whatsapp,)).fetchone()
+            if u:
+                user_id = u["id"]
+                c.execute("UPDATE users SET name=%s, password=%s, dni=%s WHERE id=%s", (parent_name, dni, dni, user_id))
+            else:
+                user_id = c.execute(
+                    """INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id""",
+                    ("parent", parent_name, parent_whatsapp, dni, dni),
+                ).fetchone()["id"]
+            sid = c.execute(
+                """INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (user_id, parent_name, parent_whatsapp, student_name, dni, age, zone, mode, place, tariff, photo_consent),
             ).fetchone()["id"]
-        c.execute(
-            """INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-            (
-                user_id, parent_name, parent_whatsapp, student_name, dni,
-                int(request.form["age"]), request.form["zone"], request.form["mode"],
-                request.form["place"], float(request.form["tariff"]), request.form["photo_consent"],
-            ),
-        )
-        c.commit()
+
+            # Las clases se guardan con fechas reales. El formulario genera los nombres
+            # class_date_N / class_time_N para poder registrar muchas clases de una vez.
+            indexes = sorted({key.rsplit("_", 1)[1] for key in request.form.keys() if key.startswith("class_date_")}, key=lambda x: int(x))
+            created = 0
+            for idx in indexes:
+                class_date = request.form.get(f"class_date_{idx}", "").strip()
+                class_time = request.form.get(f"class_time_{idx}", "").strip()
+                class_zone = request.form.get(f"class_zone_{idx}", "").strip() or zone
+                class_mode = request.form.get(f"class_mode_{idx}", "").strip() or mode
+                class_place = request.form.get(f"class_place_{idx}", "").strip() or place
+                notes = request.form.get(f"class_notes_{idx}", "").strip()
+                if not class_date or not class_time:
+                    continue
+                c.execute(
+                    """INSERT INTO classes(student_id,date,time,mode,place,amount,status,notes)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (sid, class_date, class_time, class_mode, class_place, tariff, "scheduled", notes),
+                )
+                created += 1
+            c.commit()
+        except Exception:
+            c.rollback()
+            c.close()
+            raise
         c.close()
-        flash("Alumno creado. Puede ingresar con su WhatsApp y DNI.")
+        if created:
+            flash(f"Alumno creado y {created} clase(s) registrada(s) con fechas reales.")
+        else:
+            flash("Alumno creado. Puedes agregar sus clases desde su ficha.")
+        return redirect(url_for("student_detail", sid=sid))
+
+    zones = c.execute("SELECT zone FROM (SELECT DISTINCT zone FROM students WHERE zone<>'' UNION SELECT DISTINCT zone FROM availability WHERE zone<>'') z ORDER BY zone").fetchall()
+    c.close()
+    return render_template("new_student.html", zones=[z["zone"] for z in zones], days=DAYS)
+
+
+@app.route("/entrenador/alumno/<int:sid>/eliminar", methods=["POST"])
+@coach_required
+def delete_student(sid):
+    c = db()
+    s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
+    if not s:
+        c.close()
+        flash("Alumno no encontrado.")
         return redirect(url_for("students"))
-    return render_template("new_student.html")
+    user_id = s["user_id"]
+    c.execute("DELETE FROM classes WHERE student_id=%s", (sid,))
+    c.execute("DELETE FROM payments WHERE student_id=%s", (sid,))
+    c.execute("DELETE FROM students WHERE id=%s", (sid,))
+    if user_id:
+        other = c.execute("SELECT 1 FROM students WHERE user_id=%s LIMIT 1", (user_id,)).fetchone()
+        if not other:
+            c.execute("DELETE FROM users WHERE id=%s AND role='parent'", (user_id,))
+    c.commit()
+    c.close()
+    flash("Alumno eliminado definitivamente junto con sus clases y pagos registrados.")
+    return redirect(url_for("students"))
 
 
 @app.route("/entrenador/alumno/<int:sid>/editar", methods=["GET", "POST"])
@@ -437,22 +494,41 @@ def new_class():
     if request.method == "POST":
         sid = int(request.form["student_id"])
         s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
-        c.execute(
-            """INSERT INTO classes(student_id,date,time,mode,place,amount,status,notes)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
-            (
-                sid, request.form["date"], request.form["time"], request.form["mode"],
-                request.form["place"], s["tariff"], "scheduled", request.form["notes"],
-            ),
-        )
+        if not s:
+            c.close()
+            flash("Alumno no encontrado.")
+            return redirect(url_for("new_class"))
+        indexes = sorted({key.rsplit("_", 1)[1] for key in request.form.keys() if key.startswith("class_date_")}, key=lambda x: int(x))
+        created = 0
+        for idx in indexes:
+            d = request.form.get(f"class_date_{idx}", "").strip()
+            t = request.form.get(f"class_time_{idx}", "").strip()
+            z = request.form.get(f"class_zone_{idx}", "").strip() or s["zone"] or ""
+            mode = request.form.get(f"class_mode_{idx}", "").strip() or s["mode"] or "Parque"
+            place = request.form.get(f"class_place_{idx}", "").strip() or s["place"] or ""
+            notes = request.form.get(f"class_notes_{idx}", "").strip()
+            if not d or not t:
+                continue
+            c.execute(
+                """INSERT INTO classes(student_id,date,time,mode,place,amount,status,notes)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (sid, d, t, mode, place, s["tariff"], "scheduled", notes),
+            )
+            created += 1
+        if not created:
+            c.close()
+            flash("Agrega al menos una fecha y hora válidas.")
+            return redirect(url_for("new_class", student=sid))
         c.commit()
         c.close()
-        return redirect(url_for("dashboard"))
-    students = c.execute(
-        "SELECT * FROM students WHERE status='active' ORDER BY student_name"
-    ).fetchall()
+        flash(f"Se registraron {created} clase(s) correctamente.")
+        return redirect(url_for("student_detail", sid=sid))
+    students = c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall()
+    selected_student = request.args.get("student", type=int)
+    selected = c.execute("SELECT * FROM students WHERE id=%s", (selected_student,)).fetchone() if selected_student else None
+    zones = c.execute("SELECT zone FROM (SELECT DISTINCT zone FROM students WHERE zone<>'' UNION SELECT DISTINCT zone FROM availability WHERE zone<>'') z ORDER BY zone").fetchall()
     c.close()
-    return render_template("new_class.html", students=students)
+    return render_template("new_class.html", students=students, selected=selected, zones=[z["zone"] for z in zones], days=DAYS)
 
 
 @app.route("/entrenador/pagos", methods=["GET", "POST"])
