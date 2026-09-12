@@ -1,15 +1,1 @@
-{% extends "layout.html" %}
-{% block content %}
-<header><h2>👥 Alumnos</h2></header>
-<main>
-<a href="{{url_for('dashboard')}}" class="back">← Panel</a>
-<a href="{{url_for('new_student')}}"><button class="green">+ Registrar alumno</button></a>
-{% for s in students %}
-<div class="card">
-<div class="row"><span><b>{{s.student_name}}</b><br><span class="muted">{{s.age}} años · {{s.zone}}</span><br><span class="muted small">{{s.mode}} · {{s.place}}</span></span><span class="pill">{{s.status}}</span></div>
-<p class="small">Tarifa: <b>S/ {{'%.0f'|format(s.tariff)}}</b> · Fotos/videos: <b>{{s.photo_consent}}</b></p>
-<a href="{{url_for('student_detail',sid=s.id)}}"><button class="light">Ver ficha</button></a>
-</div>
-{% else %}<p class="muted">No hay alumnos registrados.</p>{% endfor %}
-</main>
-{% endblock %}
+{% extends "layout.html" %}{% block content %}<header><h2>👨‍👩‍👦 Alumnos</h2></header><main><a href="{{url_for('dashboard')}}" class="back">← Panel</a><div class="card"><a href="{{url_for('new_student')}}"><button class="green" type="button">+ Registrar alumno</button></a></div>{% for s in students %}<div class="card"><h3>{{s.student_name}}</h3><p class="muted">{{s.age}} años · {{s.zone or 'Sin zona'}} · S/ {{s.tariff|int}}</p><p>{{s.parent_name}} · {{s.parent_whatsapp}}</p><a href="{{url_for('student_detail',sid=s.id)}}"><button class="light" type="button">Ver ficha</button></a> <a href="{{url_for('edit_student',sid=s.id)}}"><button class="light" type="button">Editar</button></a> <a href="{{url_for('new_class',student=s.id)}}"><button class="light" type="button">+ Clases</button></a><form method="post" action="{{url_for('delete_student',sid=s.id)}}" style="display:inline" onsubmit="return confirm('¿Eliminar definitivamente a {{s.student_name}}? También se eliminarán sus clases y pagos registrados.');"><button class="light" type="submit">Eliminar</button></form></div>{% else %}<div class="card"><p class="muted">No hay alumnos registrados.</p></div>{% endfor %}</main>{% endblock %}
