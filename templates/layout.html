@@ -1,5 +1,51 @@
 <!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111111"><title>{{ app_name }}</title><style>
-*{box-sizing:border-box}body{margin:0;font-family:Inter,Arial,sans-serif;background:#f5f6f7;color:#17202a}.wrap{max-width:1080px;margin:auto;padding:22px 18px 92px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:20px}.brandline{display:flex;align-items:center;gap:11px}.brandline .logo{width:50px;height:50px;border-radius:50%;object-fit:cover}.brand{font-size:23px;font-weight:900;line-height:1.05}.sub,.muted{color:#6b7280}.card{background:#fff;border-radius:17px;padding:18px;margin:14px 0;box-shadow:0 2px 12px #0000000b;border:1px solid #eceef1}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.row{display:flex;justify-content:space-between;align-items:center;gap:12px}.stat{background:#fafafa;border:1px solid #eee;border-radius:13px;padding:14px}.big{font-size:26px;font-weight:900}.pill{display:inline-block;padding:6px 9px;border-radius:999px;background:#eef1f4;font-size:12px;font-weight:800}.ok{background:#eaf8ef;color:#19713c}.warn{background:#fff4df;color:#9a5b00}.blue{background:#eaf3ff;color:#2463a8}.danger{background:#fff0f0;color:#a22}.light{background:#eef0f2;color:#17202a}.green{background:#15803d;color:#fff}.btn,button{border:0;border-radius:11px;padding:11px 14px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-block;font-size:14px}.actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.actions form{margin:0}.actions .btn,.actions button{margin:0}input,select,textarea{width:100%;padding:11px;border:1px solid #d6dae0;border-radius:10px;background:#fff;font:inherit;margin:5px 0 11px}textarea{min-height:90px}label{font-size:13px;font-weight:800}.notice{padding:12px;border-radius:11px;background:#f7f8fa;font-size:13px}.flash{padding:12px;border-radius:11px;background:#edf8f0;color:#176b36;margin:10px 0}.back{display:inline-block;margin-bottom:10px;color:#176b36;text-decoration:none;font-weight:800}.nav{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);width:min(680px,calc(100% - 18px));background:#fff;border:1px solid #e7e9ec;border-radius:16px;padding:7px;display:flex;justify-content:space-around;box-shadow:0 6px 24px #0002;z-index:10}.nav a{flex:1;text-align:center;padding:8px 4px;border-radius:10px;text-decoration:none;color:#4b5563;font-size:11px;font-weight:800;line-height:1.15}.nav a.active{background:#eaf8ef;color:#15803d}.table-wrap{width:100%;overflow-x:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}.table th{color:#6b7280}.schedule{border-left:4px solid #15803d;padding-left:11px;margin:11px 0}.schedule-group{border:1px dashed #d6dae0}.center{text-align:center}.homehero{padding:42px 20px;text-align:center}.logo{max-width:190px;max-height:70px;object-fit:contain}.small{font-size:12px}.discreet{position:fixed;right:10px;bottom:10px;opacity:.35;font-size:10px;text-decoration:none;color:#6b7280}@media(max-width:720px){.wrap{padding:16px 13px 92px}.top{margin-bottom:15px}.brandline .logo{width:44px;height:44px}.brand{font-size:20px}.sub{font-size:13px}.card{padding:15px;margin:12px 0;border-radius:15px}.grid,.grid3{grid-template-columns:1fr;gap:10px}.row{align-items:flex-start;flex-wrap:wrap}.row>span:last-child{max-width:100%}.actions{width:100%}.actions .btn,.actions button{flex:0 1 auto}.table{min-width:0}.table th,.table td{font-size:12px;padding:8px 5px}.nav{bottom:6px}.nav a{font-size:10px;padding:7px 2px}.homehero{padding:30px 16px}h1{font-size:30px;line-height:1.1}}@media(max-width:390px){.nav a{font-size:9px}.brand{font-size:19px}}.coach-access{display:inline-block;font-size:12px;font-weight:700;color:#6b7280;text-decoration:none;margin:8px 0}.coach-access:hover{text-decoration:underline}
-.coach-access-visible{display:inline-block;padding:7px 12px;border:1px solid #dfe3e8;border-radius:9px;color:#6b7280;background:#fff;text-decoration:none;font-size:12px;font-weight:800}.coach-access-visible:hover{color:#15803d;border-color:#b9dfc6}.availability-list{display:flex;flex-direction:column;gap:10px}.availability-row{display:flex;justify-content:space-between;align-items:center;gap:12px;min-width:0}.availability-row form{margin:0;flex:0 0 auto}@media(max-width:720px){.availability-row{align-items:flex-start}.availability-row>div{min-width:0;overflow-wrap:anywhere}.availability-row .btn{white-space:nowrap}}
+:root{--green:#08783d;--green2:#0d9a4f;--light:#edf8f1;--ink:#15201a;--muted:#69746e;--line:#e1e8e3}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f2f5f3;color:var(--ink)}
+.wrap{max-width:1040px;margin:0 auto;padding:18px 18px 100px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:18px}
+.brandline{display:flex;align-items:center;gap:11px}
+.brandline .logo{width:56px;height:56px;border-radius:50%;object-fit:contain}
+.brand{font-size:24px;font-weight:900;line-height:1.05;color:var(--green)}
+.sub,.muted{color:var(--muted)}
+.card{background:#fff;border:1px solid var(--line);border-radius:15px;padding:17px;margin:12px 0;box-shadow:0 2px 10px #0000000a}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.stat{background:#f7faf8;border:1px solid #e7eee9;border-radius:12px;padding:13px}
+.big{font-size:26px;font-weight:900}
+.pill{display:inline-block;padding:5px 9px;border-radius:14px;background:#e8eeea;font-size:12px;font-weight:700}
+.ok{background:#dff3e5;color:#176d3c}.warn{background:#fff1d8;color:#9a5b00}.blue{background:#e7f1ff;color:#2463a8}
+.danger{background:#fff0f0;color:#a22}.light{background:#eef5f0;color:var(--green)}.green{background:var(--green);color:#fff}
+.btn,button{border:0;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block;font-size:14px}
+.actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.actions form{margin:0}.actions .btn,.actions button{margin:0}
+input,select,textarea{width:100%;padding:11px;border:1px solid #d7e0da;border-radius:9px;background:#fff;font:inherit;margin:5px 0 11px}
+textarea{min-height:80px}label{font-size:13px;font-weight:700}
+.notice{padding:12px;border-radius:10px;background:#eef7f1;font-size:13px}
+.flash{padding:12px;border-radius:10px;background:#edf8f1;color:#176b36;margin:10px 0}
+.back{display:inline-block;margin-bottom:10px;color:var(--green);text-decoration:none;font-weight:800}
+.nav{position:fixed;bottom:9px;left:50%;transform:translateX(-50%);width:min(680px,calc(100% - 18px));background:#fff;border:1px solid #e1e8e3;border-radius:16px;padding:7px;display:flex;justify-content:space-around;box-shadow:0 5px 22px #0002;z-index:10}
+.nav a{flex:1;text-align:center;padding:8px 4px;border-radius:10px;text-decoration:none;color:#526058;font-size:11px;font-weight:800;line-height:1.15}
+.nav a.active{background:#edf8f1;color:var(--green)}
+.table-wrap{width:100%;overflow-x:auto}.table{width:100%;border-collapse:collapse}
+.table th,.table td{text-align:left;padding:10px 8px;border-bottom:1px solid #edf0ee;font-size:13px;vertical-align:top}.table th{color:var(--muted)}
+.schedule{border-left:4px solid var(--green);padding-left:11px;margin:11px 0}
+.center{text-align:center}.homehero{padding:40px 20px;text-align:center}.small{font-size:12px}
+.discreet{position:fixed;right:10px;bottom:74px;opacity:.72;font-size:11px;text-decoration:none;color:#526058;border:1px solid #dce5df;border-radius:9px;padding:7px 10px;background:#fff}
+.coach-access-visible{display:inline-block;padding:8px 12px;border:1px solid #cfe0d5;border-radius:9px;color:var(--green);background:#fff;text-decoration:none;font-size:12px;font-weight:800}
+.availability-list{display:flex;flex-direction:column;gap:9px}.availability-row{display:flex;justify-content:space-between;align-items:center;gap:12px;min-width:0}
+.availability-row form{margin:0;flex:0 0 auto}.availability-row>div{min-width:0}
+@media(max-width:720px){
+ .wrap{max-width:430px;padding:15px 13px 92px}
+ .top{margin-bottom:14px}.brandline .logo{width:46px;height:46px}.brand{font-size:21px}.sub{font-size:13px}
+ .card{padding:15px;margin:11px 0;border-radius:14px}.grid,.grid3{grid-template-columns:1fr;gap:9px}
+ .row{align-items:flex-start;flex-wrap:wrap}.actions{width:100%}
+ .actions .btn,.actions button{flex:0 1 auto}.table-wrap{overflow-x:auto}
+ .table{min-width:620px}.nav{bottom:6px}.nav a{font-size:10px;padding:7px 2px}
+ h1{font-size:29px;line-height:1.1}.homehero{padding:30px 15px}
+ .availability-row{align-items:flex-start}.availability-row>div{overflow-wrap:anywhere}
+}
+@media(max-width:390px){.nav a{font-size:9px}.brand{font-size:20px}}
 </style></head><body><div class="wrap"><div class="top"><div class="brandline"><img class="logo" src="{{ url_for('static', filename='logo.jpg') }}" alt="JC Fútbol Coach"><div><div class="brand">JC Fútbol Coach</div><div class="sub">{{ 'Coach Juan Carlos' if session.get('role')=='coach' else 'Entrenamiento personalizado de fútbol' }}</div></div></div>{% if session.get('role') %}<a class="btn light" href="{{ url_for('logout') }}">Cerrar sesión</a>{% endif %}</div>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}{% block content %}{% endblock %}</div>{% if session.get('role')=='parent' %}<a href="/coach/login" class="coach-access">Acceso Coach</a>
 <nav class="nav"><a href="{{url_for('parent_home')}}">🏠<br>Inicio</a><a href="{{url_for('parent_home')}}#clases">📅<br>Clases</a><a href="{{url_for('parent_home')}}#pagos">💰<br>Pagos</a><a href="{{url_for('parent_home')}}#perfil">👤<br>Perfil</a></nav>{% elif session.get('role')=='coach' %}<nav class="nav"><a href="{{url_for('dashboard')}}">🏠<br>Panel</a><a href="{{url_for('new_class')}}">📅<br>Clase</a><a href="{{url_for('students')}}">👥<br>Alumnos</a><a href="{{url_for('availability')}}">🕐<br>Disponibilidad</a><a href="{{url_for('payments')}}">💰<br>Pagos</a></nav>{% endif %}{% if not session.get('role') %}<a class="discreet" href="{{url_for('coach_login')}}">Coach</a>{% endif %}</body></html>
