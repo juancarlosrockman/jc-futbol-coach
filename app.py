@@ -207,58 +207,37 @@ def sync_payment_status(c, student_id=None):
 
 
 def reschedule_slots(c, current, today):
-    """Return free recovery slots for the current week, then next week if needed.
-
-    Public availability is never enough by itself: the student's already programmed
-    weekday/time patterns also create punctual recovery spaces. These slots are
-    visible only to existing families (and Coach Juan Carlos).
-    """
-    monday, saturday = current_week_bounds(today)
-    week_starts = [monday]
-    if not any(_free_slot_exists(c, current, monday, saturday, current["id"] ) for _ in [0]):
-        next_monday = monday + timedelta(days=7)
-        week_starts.append(next_monday)
-    slots=[]; seen=set(); zone=(current["student_zone"] or "").strip()
-    av=c.execute("SELECT zone,day,time FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall()
-    candidates=[(a["day"],a["time"],a["zone"]) for a in av]
-    own_patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled')", (current["student_id"],)).fetchall()
-    for row in own_patterns:
-        try: d=date.fromisoformat(row["date"])
+    """Return public and automatic recovery slots for an existing student."""
+    today = today if isinstance(today, date) else date.fromisoformat(str(today))
+    horizon = today + timedelta(days=45)
+    zone = (current["student_zone"] or "").strip()
+    candidates=[]; seen_candidates=set()
+    # Public availability is available for reprogramming when it matches the student's zone.
+    for a in c.execute("SELECT zone,day,time,turn FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall():
+        key=(a["day"],a["time"])
+        if key not in seen_candidates:
+            candidates.append((a["day"],a["time"],zone,"public")); seen_candidates.add(key)
+    # Existing weekday/time patterns create automatic recovery spaces after the programmed series.
+    patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled','postponed')",(current["student_id"],)).fetchall()
+    for r in patterns:
+        try: d0=date.fromisoformat(r["date"])
         except Exception: continue
-        if d.weekday()<6: candidates.append((DAYS[d.weekday()],row["time"],zone))
-    for start_day in week_starts:
-        end_day=start_day+timedelta(days=5)
-        for day_name,tm,z in candidates:
-            if day_name not in DAYS: continue
-            d=start_day+timedelta(days=DAYS.index(day_name))
-            if not (today <= d <= end_day): continue
-            key=(d.isoformat(),tm)
-            if key in seen or (d.isoformat()==current["date"] and tm==current["time"]): continue
-            occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1", (d.isoformat(),tm,current["id"])).fetchone()
-            if occupied: continue
-            seen.add(key); slots.append({"date":d.isoformat(),"day":day_name,"time":tm,"zone":z,"turn":turn_for_time(tm)})
-        if slots: break
+        key=(DAYS[d0.weekday()],r["time"])
+        if key not in seen_candidates:
+            candidates.append((key[0],key[1],zone,"recovery")); seen_candidates.add(key)
+    slots=[]; seen=set()
+    for day_name,tm,z,kind in candidates:
+        if day_name not in DAYS: continue
+        d=today+timedelta(days=(DAYS.index(day_name)-today.weekday())%7)
+        while d<=horizon:
+            if d>=today and not (d.isoformat()==current["date"] and tm==current["time"]):
+                occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(d.isoformat(),tm,current["id"])).fetchone()
+                key=(d.isoformat(),tm)
+                if not occupied and key not in seen:
+                    seen.add(key); slots.append({"date":d.isoformat(),"day":day_name,"time":tm,"zone":z,"turn":turn_for_time(tm),"kind":kind})
+            d+=timedelta(days=7)
     slots.sort(key=lambda x:(x["date"],x["time"]))
     return slots
-
-
-def _free_slot_exists(c, current, monday, saturday, class_id):
-    # Helper used only to decide whether to offer the next week as fallback.
-    zone=(current["student_zone"] or "").strip()
-    av=c.execute("SELECT day,time FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall()
-    patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled')", (current["student_id"],)).fetchall()
-    candidates={(a["day"],a["time"]) for a in av}
-    for r in patterns:
-        try: d=date.fromisoformat(r["date"]); candidates.add((DAYS[d.weekday()],r["time"]))
-        except Exception: pass
-    for day_name,tm in candidates:
-        if day_name not in DAYS: continue
-        d=monday+timedelta(days=DAYS.index(day_name))
-        if monday <= d <= saturday and d >= datetime.now(PERU_TZ).date():
-            occ=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(d.isoformat(),tm,class_id)).fetchone()
-            if not occ and not (d.isoformat()==current["date"] and tm==current["time"]): return True
-    return False
-
 
 def class_status_label(status):
     return {
@@ -716,8 +695,24 @@ def availability():
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
-        WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall(); c.close()
-    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER)
+        WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
+    today=datetime.now(PERU_TZ).date(); horizon=today+timedelta(days=45); recovery=[]; seen=set()
+    for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
+        patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled','postponed')",(st['id'],)).fetchall()
+        if not patterns: continue
+        last=max(date.fromisoformat(r['date']) for r in patterns)
+        for r in patterns:
+            d=date.fromisoformat(r['date'])+timedelta(days=7)
+            while d<=horizon:
+                key=(d.isoformat(),r['time'])
+                if d>today and d>last and key not in seen:
+                    occ=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",(d.isoformat(),r['time'])).fetchone()
+                    if not occ:
+                        seen.add(key); recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':d.isoformat(),'day':DAYS[d.weekday()],'time':r['time']})
+                d+=timedelta(days=7)
+    recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
+    c.close()
+    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,recovery_slots=recovery)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
