@@ -78,6 +78,7 @@ def init_db():
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
+    merge_duplicate_parent_accounts(c)
     c.commit()
 
     coach_user = os.environ.get("COACH_USER", "").strip()
@@ -104,6 +105,24 @@ def coach_required(f):
 
 def normalize_whatsapp(value):
     return re.sub(r"\D", "", value or "")
+
+
+def merge_duplicate_parent_accounts(c):
+    """Consolidate accidental duplicate parent accounts sharing one WhatsApp."""
+    parents = c.execute("SELECT id, name, whatsapp, password FROM users WHERE role='parent' ORDER BY id").fetchall()
+    by_phone = {}
+    for u in parents:
+        key = normalize_whatsapp(u["whatsapp"])
+        if not key:
+            continue
+        by_phone.setdefault(key, []).append(u)
+    for key, group in by_phone.items():
+        if len(group) < 2:
+            continue
+        keep = group[0]
+        for duplicate in group[1:]:
+            c.execute("UPDATE students SET user_id=%s WHERE user_id=%s", (keep["id"], duplicate["id"]))
+            c.execute("DELETE FROM users WHERE id=%s AND role='parent'", (duplicate["id"],))
 
 
 def display_date(iso):
@@ -193,12 +212,19 @@ def nuevo():
         c.close()
         return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
     availability_rows = c.execute(
-        """SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
+        """SELECT * FROM availability WHERE active=TRUE ORDER BY zone, CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4
-        WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END, time, zone"""
+        WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END, time"""
     ).fetchall()
+    zones = []
+    seen = set()
+    public_availability = []
+    for a in availability_rows:
+        if a["zone"] not in seen:
+            zones.append(a["zone"]); seen.add(a["zone"])
+        public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"])})
     c.close()
-    return render_template("new.html", availability=availability_rows)
+    return render_template("new.html", availability=public_availability, zones=zones)
 
 
 @app.route("/espera", methods=["GET", "POST"])
@@ -210,7 +236,7 @@ def espera():
             request.form["parent_name"], request.form["whatsapp"], request.form["student_name"],
             request.form["age"], request.form.get("zone", ""), request.form.get("preferences", "")))
         c.commit(); c.close(); return redirect(url_for("solicitud_recibida"))
-    return render_template("waitlist.html")
+    return render_template("waitlist.html", prefill=request.args)
 
 
 @app.route("/equipo", methods=["GET", "POST"])
@@ -261,8 +287,40 @@ def dashboard():
         LEFT JOIN students ON students.id=classes.student_id WHERE classes.date=%s
         ORDER BY classes.time""", (today,)).fetchall()
     wait_count = c.execute("SELECT COUNT(*) AS n FROM waitlist WHERE status='waiting'").fetchone()["n"]
-    pending_payments = c.execute("""SELECT COUNT(*) AS n FROM classes WHERE date >= %s
-        AND payment_status='pending' AND status IN ('scheduled','rescheduled','postponed')""", (today,)).fetchone()["n"]
+    # A class is pending only when it has no paid package/payment coverage.
+    # Legacy classes without a payment_id are matched against paid regular
+    # payments in the same calendar month, preventing false pending counts.
+    pending_payments = 0
+    for s in students:
+        future = c.execute("""SELECT id,date,payment_id,payment_status FROM classes
+            WHERE student_id=%s AND date >= %s AND status IN ('scheduled','rescheduled','postponed')
+            ORDER BY date,time""", (s["id"], today)).fetchall()
+        if not future:
+            continue
+        tariff = float(s["tariff"] or 0)
+        regular_capacity = {}
+        if tariff > 0:
+            paid_regular_rows = c.execute("""SELECT month, COALESCE(SUM(amount),0) AS total
+                FROM payments WHERE student_id=%s AND status='paid' AND payment_type='regular'
+                GROUP BY month""", (s["id"],)).fetchall()
+            for p in paid_regular_rows:
+                regular_capacity[p["month"]] = int((float(p["total"] or 0)) // tariff)
+        package_remaining = 0
+        package_rows = c.execute("""SELECT id,sessions_total FROM payments
+            WHERE student_id=%s AND status='paid' AND payment_type='package_8' ORDER BY id""", (s["id"],)).fetchall()
+        for p in package_rows:
+            assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
+            package_remaining += max(0, (p["sessions_total"] or 8) - assigned)
+        for x in future:
+            if x["payment_id"] is not None or x["payment_status"] == "paid":
+                continue
+            month = x["date"][:7]
+            if regular_capacity.get(month, 0) > 0:
+                regular_capacity[month] -= 1
+            elif package_remaining > 0:
+                package_remaining -= 1
+            else:
+                pending_payments += 1
     teams = c.execute("SELECT * FROM teams WHERE date >= %s ORDER BY date,time LIMIT 10", (today,)).fetchall()
     c.close()
     return render_template("dashboard.html", students=students, classes=classes, today_classes=today_classes,
@@ -281,34 +339,62 @@ def students():
 def new_student():
     c = db()
     if request.method == "POST":
-        parent_name = request.form.get("parent_name", "").strip(); parent_whatsapp = request.form.get("parent_whatsapp", "").strip()
-        student_name = request.form.get("student_name", "").strip(); dni = request.form.get("dni", "").strip()
-        zone = request.form.get("zone", "").strip(); mode = request.form.get("mode", "Parque").strip(); place = request.form.get("place", "").strip()
-        photo_consent = request.form.get("photo_consent", "No").strip()
-        if not all([parent_name,parent_whatsapp,student_name,dni,zone,place]):
+        parent_name = request.form.get("parent_name", "").strip()
+        parent_whatsapp = normalize_whatsapp(request.form.get("parent_whatsapp", ""))
+        student_name = request.form.get("student_name", "").strip()
+        dni = request.form.get("dni", "").strip()
+        zone = request.form.get("zone", "").strip()
+        mode = request.form.get("mode", "Parque").strip()
+        place = request.form.get("place", "").strip()
+        photo_consent = request.form.get("photo_consent", "No, no autorizo").strip()
+        parent_password = request.form.get("parent_password", "").strip()
+        if not all([parent_name, parent_whatsapp, student_name, dni, zone, place]):
             c.close(); flash("Completa nombre, WhatsApp, alumno, DNI, zona y lugar."); return redirect(url_for("new_student"))
-        try: age=int(request.form.get("age","0")); tariff=float(request.form.get("tariff","0"))
-        except (ValueError,TypeError):
-            c.close(); flash("Edad y tarifa deben ser válidas."); return redirect(url_for("new_student"))
         try:
-            u=c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=%s",(parent_whatsapp,)).fetchone()
+            age = int(request.form.get("age", "0"))
+            tariff = float(request.form.get("tariff", "0"))
+        except (ValueError, TypeError):
+            c.close(); flash("Edad y tarifa deben ser válidas."); return redirect(url_for("new_student"))
+        if age < 3 or tariff < 0:
+            c.close(); flash("Revisa la edad y la tarifa."); return redirect(url_for("new_student"))
+        try:
+            # One parent account can have several children. Never replace the
+            # existing password when the WhatsApp already belongs to a parent.
+            parent_candidates = c.execute("SELECT * FROM users WHERE role='parent' ORDER BY id").fetchall()
+            u = next((x for x in parent_candidates if normalize_whatsapp(x["whatsapp"]) == parent_whatsapp), None)
             if u:
-                user_id=u["id"]; c.execute("UPDATE users SET name=%s,password=%s,dni=%s,whatsapp=%s WHERE id=%s",(parent_name,dni,dni,parent_whatsapp,user_id))
+                user_id = u["id"]
+                c.execute("UPDATE users SET name=%s,whatsapp=%s WHERE id=%s", (parent_name, parent_whatsapp, user_id))
+                password_notice = None
             else:
-                user_id=c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id",("parent",parent_name,parent_whatsapp,dni,dni)).fetchone()["id"]
-            sid=c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)).fetchone()["id"]
-            created=save_class_groups(c,sid,tariff,request.form)
-            payment_id=save_optional_payment(c,sid,request.form,created)
-            if payment_id:
-                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE student_id=%s AND id = ANY(%s)", (payment_id,sid,created))
+                if not parent_password:
+                    import secrets
+                    parent_password = "JC" + secrets.token_hex(3).upper()
+                user_id = c.execute(
+                    "INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id",
+                    ("parent", parent_name, parent_whatsapp, parent_password, "")
+                ).fetchone()["id"]
+                password_notice = parent_password
+            sid = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,photo_consent)).fetchone()["id"]
+            created = save_class_groups(c, sid, tariff, request.form)
+            payment_id = save_optional_payment(c, sid, request.form, created)
+            if payment_id and created:
+                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id = ANY(%s)", (payment_id, created))
             c.commit()
         except Exception:
             c.rollback(); c.close(); raise
-        c.close(); flash(f"Alumno creado y {len(created)} clase(s) registrada(s)." if created else "Alumno creado. Puedes agregar sus clases desde su ficha.")
-        return redirect(url_for("student_detail",sid=sid))
-    zones=c.execute("SELECT DISTINCT zone FROM students WHERE zone<>'' ORDER BY zone").fetchall(); c.close()
-    return render_template("new_student.html", zones=[z["zone"] for z in zones], days=DAYS)
+        c.close()
+        if password_notice:
+            flash(f"Alumno creado. Contraseña inicial del padre/madre: {password_notice}")
+        elif created:
+            flash(f"Alumno agregado a la cuenta existente y {len(created)} clase(s) registrada(s).")
+        else:
+            flash("Alumno agregado a la cuenta existente. Puedes agregar sus clases desde su ficha.")
+        return redirect(url_for("student_detail", sid=sid))
+    c.close()
+    return render_template("new_student.html", days=DAYS)
 
 
 def save_class_groups(c, sid, tariff, form):
@@ -317,8 +403,10 @@ def save_class_groups(c, sid, tariff, form):
     for idx in indexes:
         d=form.get(f"class_date_{idx}","").strip(); t=form.get(f"class_time_{idx}","").strip()
         if not d or not t: continue
-        z=form.get(f"class_zone_{idx}","").strip(); mode=form.get(f"class_mode_{idx}","").strip() or "Parque"
-        place=form.get(f"class_place_{idx}","").strip(); notes=form.get(f"class_notes_{idx}","").strip()
+        student_place = c.execute("SELECT mode, place FROM students WHERE id=%s", (sid,)).fetchone()
+        mode=(student_place["mode"] if student_place else "Parque") or "Parque"
+        place=(student_place["place"] if student_place else "") or ""
+        notes=form.get(f"class_notes_{idx}","").strip()
         row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes)
             VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,tariff,d,t,notes)).fetchone()
         created.append(row["id"])
@@ -328,29 +416,34 @@ def save_class_groups(c, sid, tariff, form):
 def save_optional_payment(c, sid, form, created_ids):
     if form.get("payment_received") != "yes":
         return None
-    action=form.get("payment_type","regular")
-    if action=="package_existing":
-        pid=int(form.get("package_id","0") or 0)
-        p=c.execute("SELECT * FROM payments WHERE id=%s AND student_id=%s AND payment_type='package_8' AND status='paid'",(pid,sid)).fetchone()
+    ptype = form.get("payment_type", "regular")
+    if ptype == "package_existing":
+        pid = int(form.get("package_id", "0") or 0)
+        p = c.execute("SELECT * FROM payments WHERE id=%s AND student_id=%s AND payment_type='package_8' AND status='paid'", (pid, sid)).fetchone()
         if not p:
-            return None
-        used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'",(pid,)).fetchone()["n"]
-        remaining=max(0,(p["sessions_total"] or 8)-used)
-        if len(created_ids)>remaining:
+            raise ValueError("package_invalid")
+        used = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (pid,)).fetchone()["n"]
+        remaining = max(0, (p["sessions_total"] or 8) - used)
+        if len(created_ids) > remaining:
             raise ValueError("package_limit")
-        c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)",(pid,created_ids))
+        c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)", (pid, created_ids))
         return pid
-    amount=service_amount(form.get("payment_amount")); total=1
-    if action=="package_8": amount=520.0; total=8
-    else: total=max(1,len(created_ids))
-    if amount<=0:
-        return None
-    month=form.get("payment_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
-    method=form.get("payment_method") or "No especificado"
-    pid=c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
-        VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s) RETURNING id""",(sid,month,amount,method,form.get("payment_note",""),action,total,datetime.now(PERU_TZ))).fetchone()["id"]
+    if ptype == "package_8":
+        amount, total = 520.0, 8
+        if len(created_ids) > total:
+            raise ValueError("package_limit")
+    else:
+        amount = service_amount(form.get("payment_amount"))
+        total = max(1, len(created_ids))
+    if amount <= 0:
+        raise ValueError("payment_amount")
+    month = form.get("payment_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
+    method = form.get("payment_method") or "No especificado"
+    pid = c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
+        VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s) RETURNING id""",
+        (sid, month, amount, method, form.get("payment_note", ""), ptype, total, datetime.now(PERU_TZ))).fetchone()["id"]
     if created_ids:
-        c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)",(pid,created_ids))
+        c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)", (pid, created_ids))
     return pid
 
 
@@ -365,18 +458,34 @@ def delete_student(sid):
     c.commit(); c.close(); flash("Alumno eliminado definitivamente junto con sus clases y pagos registrados."); return redirect(url_for("students"))
 
 
-@app.route("/entrenador/alumno/<int:sid>/editar", methods=["GET","POST"])
+@app.route("/entrenador/alumno/<int:sid>/editar", methods=["GET", "POST"])
 @coach_required
 def edit_student(sid):
-    c=db(); s=c.execute("SELECT * FROM students WHERE id=%s",(sid,)).fetchone()
-    if not s: c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
-    if request.method=="POST":
-        parent_name=request.form["parent_name"].strip(); parent_whatsapp=request.form["parent_whatsapp"].strip(); student_name=request.form["student_name"].strip(); dni=request.form["dni"].strip()
-        if not parent_name or not parent_whatsapp or not student_name or not dni: c.close(); flash("Completa nombre, WhatsApp, alumno y DNI."); return redirect(url_for("edit_student",sid=sid))
-        u=c.execute("SELECT * FROM users WHERE role='parent' AND whatsapp=%s",(parent_whatsapp,)).fetchone()
-        if u: user_id=u["id"]; c.execute("UPDATE users SET name=%s,password=%s,dni=%s,whatsapp=%s WHERE id=%s",(parent_name,dni,dni,parent_whatsapp,user_id))
-        else: user_id=c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id",("parent",parent_name,parent_whatsapp,dni,dni)).fetchone()["id"]
-        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,photo_consent=%s WHERE id=%s""",(user_id,parent_name,parent_whatsapp,student_name,dni,int(request.form["age"]),request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),float(request.form["tariff"]),request.form["photo_consent"],sid))
+    c = db(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
+    if not s:
+        c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
+    if request.method == "POST":
+        parent_name=request.form["parent_name"].strip(); parent_whatsapp=normalize_whatsapp(request.form["parent_whatsapp"]); student_name=request.form["student_name"].strip(); dni=request.form["dni"].strip()
+        if not parent_name or not parent_whatsapp or not student_name or not dni:
+            c.close(); flash("Completa nombre, WhatsApp, alumno y DNI."); return redirect(url_for("edit_student",sid=sid))
+        try:
+            age=int(request.form["age"]); tariff=float(request.form["tariff"])
+        except (ValueError,TypeError):
+            c.close(); flash("Edad y tarifa deben ser válidas."); return redirect(url_for("edit_student",sid=sid))
+        parent_candidates=c.execute("SELECT * FROM users WHERE role='parent' ORDER BY id").fetchall()
+        u=next((x for x in parent_candidates if normalize_whatsapp(x["whatsapp"])==parent_whatsapp),None)
+        if u:
+            user_id=u["id"]
+            c.execute("UPDATE users SET name=%s,whatsapp=%s WHERE id=%s",(parent_name,parent_whatsapp,user_id))
+        else:
+            # If the original account belongs only to this student, keep it and update its identity.
+            user_id=s["user_id"]
+            if user_id:
+                c.execute("UPDATE users SET name=%s,whatsapp=%s WHERE id=%s",(parent_name,parent_whatsapp,user_id))
+            else:
+                user_id=c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id",("parent",parent_name,parent_whatsapp,dni,dni)).fetchone()["id"]
+        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,photo_consent=%s WHERE id=%s""",
+                  (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,request.form["photo_consent"],sid))
         c.commit(); c.close(); flash("Alumno actualizado correctamente."); return redirect(url_for("student_detail",sid=sid))
     c.close(); return render_template("edit_student.html",s=s)
 
@@ -384,16 +493,18 @@ def edit_student(sid):
 @app.route("/entrenador/alumno/<int:sid>")
 @coach_required
 def student_detail(sid):
-    c=db(); s=c.execute("SELECT * FROM students WHERE id=%s",(sid,)).fetchone()
-    if not s: c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
-    classes=c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC",(sid,)).fetchall()
-    payments=c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC",(sid,)).fetchall()
-    packages=[]
+    c = db(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
+    if not s:
+        c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
+    classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC", (sid,)).fetchall()
+    payments = c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC", (sid,)).fetchall()
+    packages = []
     for p in payments:
-        if p["payment_type"]=="package_8":
-            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'",(p["id"],)).fetchone()["n"]
-            pending=max(0,(p["sessions_total"] or 8)-used); packages.append({"payment":p,"used":used,"remaining":pending})
-    c.close(); return render_template("student_detail.html",s=s,classes=classes,payments=payments,packages=packages)
+        if p["payment_type"] == "package_8":
+            assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
+            attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
+            packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
+    c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages)
 
 
 @app.route("/entrenador/clase/<int:class_id>/estado", methods=["POST"])
@@ -432,7 +543,7 @@ def new_class():
             c.commit()
         except ValueError as exc:
             c.rollback(); c.close()
-            msg = "El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else "Agrega al menos una fecha y hora válidas."
+            msg = "El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else ("No se pudo registrar el pago. Revisa el monto." if str(exc) in ("payment_amount", "package_invalid") else "Agrega al menos una fecha y hora válidas.")
             flash(msg); return redirect(url_for("new_class",student=sid))
         except Exception:
             c.rollback(); c.close(); raise
@@ -440,7 +551,7 @@ def new_class():
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall(); selected_id=request.args.get("student",type=int)
     selected=c.execute("SELECT * FROM students WHERE id=%s",(selected_id,)).fetchone() if selected_id else None
     zones=c.execute("SELECT DISTINCT zone FROM (SELECT zone FROM students WHERE zone<>'' UNION SELECT zone FROM availability WHERE active=TRUE AND zone<>'') z ORDER BY zone").fetchall()
-    packages=c.execute("SELECT * FROM payments WHERE payment_type='package_8' AND status='paid' ORDER BY id DESC").fetchall()
+    packages=c.execute("SELECT * FROM payments WHERE student_id=%s AND payment_type='package_8' AND status='paid' ORDER BY id DESC", (selected_id or -1,)).fetchall()
     c.close(); return render_template("new_class.html",students=students,selected=selected,zones=[z["zone"] for z in zones],days=DAYS,packages=packages)
 
 
@@ -453,8 +564,21 @@ def payments():
         total=1
         if ptype=="package_8": amount=520; total=8
         if amount<=0: c.close(); flash("Ingresa un monto válido."); return redirect(url_for("payments"))
-        c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
-            VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s)""",(sid,request.form["month"],amount,request.form.get("method"),request.form.get("note",""),ptype,total,datetime.now(PERU_TZ)))
+        payment_month=request.form["month"]
+        pid=c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
+            VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s) RETURNING id""",(sid,payment_month,amount,request.form.get("method"),request.form.get("note",""),ptype,total,datetime.now(PERU_TZ))).fetchone()["id"]
+        if ptype == "package_8":
+            to_link=c.execute("""SELECT id FROM classes WHERE student_id=%s AND payment_status='pending'
+                ORDER BY date,time LIMIT 8""", (sid,)).fetchall()
+        else:
+            tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s",(sid,)).fetchone()
+            tariff=float(tariff_row["tariff"] or 0) if tariff_row else 0
+            capacity=int(amount//tariff) if tariff>0 else 0
+            to_link=c.execute("""SELECT id FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='pending'
+                ORDER BY date,time LIMIT %s""", (sid,payment_month+'%',max(0,capacity))).fetchall() if capacity else []
+        ids=[r["id"] for r in to_link]
+        if ids:
+            c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)",(pid,ids))
         c.commit(); flash("Pago registrado correctamente.")
     rows=c.execute("SELECT payments.*,students.student_name FROM payments LEFT JOIN students ON students.id=payments.student_id ORDER BY payments.month DESC,payments.id DESC").fetchall()
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall()
@@ -530,19 +654,31 @@ def change_password():
 
 @app.route("/alumno")
 def parent_home():
-    if session.get("role")!="parent": return redirect(url_for("parent_login"))
-    c=db(); s=c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' LIMIT 1",(session["user_id"],)).fetchone()
-    if not s: c.close(); flash("No hay un alumno asociado a esta cuenta."); return redirect(url_for("logout"))
-    today=datetime.now(PERU_TZ).date().isoformat()
-    upcoming=c.execute("SELECT * FROM classes WHERE student_id=%s AND (date>=%s OR status='postponed') ORDER BY date,time",(s["id"],today)).fetchall()
-    history=c.execute("SELECT * FROM classes WHERE student_id=%s AND date<%s AND status<>'postponed' ORDER BY date DESC,time DESC LIMIT 50",(s["id"],today)).fetchall()
-    payments_rows=c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC",(s["id"],)).fetchall()
-    packages=[]
-    for p in payments_rows:
-        if p["payment_type"]=="package_8":
-            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'",(p["id"],)).fetchone()["n"]
-            packages.append({"payment":p,"used":used,"remaining":max(0,(p["sessions_total"] or 8)-used)})
-    c.close(); return render_template("parent.html",s=s,upcoming=upcoming,history=history,payments=payments_rows,packages=packages)
+    if session.get("role") != "parent": return redirect(url_for("parent_login"))
+    c = db(); user_id = session["user_id"]; today = datetime.now(PERU_TZ).date().isoformat()
+    children = c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' ORDER BY student_name", (user_id,)).fetchall()
+    if not children:
+        c.close(); flash("No hay alumnos asociados a esta cuenta."); return redirect(url_for("logout"))
+    child_data = []
+    for s in children:
+        current_month = today[:7]
+        upcoming = c.execute("""SELECT * FROM classes WHERE student_id=%s
+            AND status IN ('scheduled','rescheduled','postponed')
+            AND ((date >= %s AND date LIKE %s) OR (payment_id IN (
+                SELECT id FROM payments WHERE student_id=%s AND payment_type='package_8' AND status='paid'
+            ) AND date >= %s))
+            ORDER BY date,time""", (s["id"], today, current_month + '%', s["id"], today)).fetchall()
+        history = c.execute("""SELECT * FROM classes WHERE student_id=%s AND date<%s
+            ORDER BY date DESC,time DESC LIMIT 100""", (s["id"], today)).fetchall()
+        payments_rows = c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC", (s["id"],)).fetchall()
+        packages = []
+        for p in payments_rows:
+            if p["payment_type"] == "package_8":
+                assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
+                attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
+                packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8)-assigned)})
+        child_data.append({"student": s, "upcoming": upcoming, "history": history, "payments": payments_rows, "packages": packages})
+    c.close(); return render_template("parent.html", children=child_data)
 
 
 @app.route("/alumno/clase/<int:class_id>/postergar", methods=["POST"])
