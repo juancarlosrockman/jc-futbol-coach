@@ -1,3 +1,74 @@
-{% extends "layout.html" %}{% block content %}<a class="back" href="{{url_for('students')}}">← Alumnos</a><div class="card"><h1>Registrar alumno</h1><p class="muted">Puedes registrar al alumno y sus próximas clases en un solo paso.</p><form method="post" id="studentForm"><div class="grid"><div><h3>Datos</h3><label>Padre/madre</label><input name="parent_name" required><label>WhatsApp</label><input name="parent_whatsapp" required><label>Alumno</label><input name="student_name" required><label>Edad</label><input name="age" type="number" min="3" required><label>DNI / documento</label><input name="dni" required></div><div><h3>Entrenamiento</h3><label>Zona</label><input name="zone" placeholder="Ej. Chorrillos" required><p class="small muted">Campo manual: puedes escribir cualquier zona.</p><label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input name="place" required><label>Tarifa por clase (S/)</label><input name="tariff" type="number" step="0.01" value="70" min="0" required><label>Fotos y videos</label><select name="photo_consent"><option>No, no autorizo</option><option>Sí, autorizo</option></select></div></div><hr><h3>📅 Clases</h3><p class="muted">Cada grupo genera fechas reales. Ejemplo: lunes 07/09/2026 + 5 clases crea 07, 14, 21, 28/09 y 05/10.</p><div id="groups"></div><button type="button" class="btn light" onclick="addGroup()">+ Agregar otro horario</button><hr><h3>💰 Pago (opcional)</h3><p class="muted">Si el papá ya pagó, puedes registrarlo ahora. Si todavía no, déjalo pendiente.</p><label>¿Pago recibido?</label><select name="payment_received" id="payment_received" onchange="togglePay()"><option value="no">No</option><option value="yes">Sí</option></select><div id="paybox" style="display:none"><label>Tipo</label><select name="payment_type" id="payment_type" onchange="togglePayType()"><option value="regular">Pago regular</option><option value="package_8">Paquete de 8 clases — S/520</option></select><div id="regularAmount"><label>Monto recibido (S/)</label><input name="payment_amount" type="number" step="0.01" value="0"></div><label>Mes / período</label><input name="payment_month" type="month"><label>Medio de pago</label><select name="payment_method"><option>Yape</option><option>Plin</option><option>Efectivo</option><option>Otro</option></select><label>Nota</label><input name="payment_note" placeholder="Opcional"></div><button class="btn green" style="margin-top:15px">Guardar alumno y clases</button></form></div><script>
-let n=0;const days={{days|tojson}};function addGroup(){const i=n++;const d=document.createElement('div');d.className='card schedule-group';d.innerHTML=`<h4>Horario ${i+1}</h4><label>Día</label><select class="gd">${days.map(x=>`<option>${x}</option>`).join('')}</select><label>Primera fecha real</label><input type="date" class="gs" required><label>Hora</label><input type="time" class="gt" required><label>Cantidad de clases</label><input type="number" class="gc" min="1" max="52" value="1" required><label>Zona</label><input class="gz" placeholder="Ej. Chorrillos" required><label>Modalidad</label><select class="gm"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input class="gp" placeholder="Lugar de la clase" required><label>Observación</label><input class="gn"><button type="button" class="btn light" onclick="this.closest('.schedule-group').remove()">Eliminar este horario</button>`;document.getElementById('groups').appendChild(d)}
-function di(x){return days.indexOf(x)}function fd(d){return d.toISOString().slice(0,10)}document.getElementById('studentForm').addEventListener('submit',e=>{document.querySelectorAll('.gen').forEach(x=>x.remove());let k=0,ok=true;document.querySelectorAll('.schedule-group').forEach(g=>{const wd=g.querySelector('.gd').value,sv=g.querySelector('.gs').value,t=g.querySelector('.gt').value,c=parseInt(g.querySelector('.gc').value||0);if(!sv||!t||!c)return;const st=new Date(sv+'T12:00:00');if(st.getDay()!==((di(wd)+1)%7)){alert('La primera fecha debe corresponder al día seleccionado: '+wd+'.');ok=false;return}for(let j=0;j<c;j++){const x=new Date(st);x.setDate(x.getDate()+j*7);const vals={date:fd(x),time:t,zone:g.querySelector('.gz').value.trim(),mode:g.querySelector('.gm').value,place:g.querySelector('.gp').value.trim(),notes:g.querySelector('.gn').value.trim()};for(const [key,val] of Object.entries(vals)){const q=document.createElement('input');q.type='hidden';q.name=`class_${key}_${k}`;q.value=val;q.className='gen';e.target.appendChild(q)}k++}});if(!ok)e.preventDefault()});addGroup();function togglePay(){document.getElementById('paybox').style.display=document.getElementById('payment_received').value==='yes'?'block':'none'}function togglePayType(){document.getElementById('regularAmount').style.display=document.getElementById('payment_type').value==='regular'?'block':'none'}</script>{% endblock %}
+{% extends "layout.html" %}{% block content %}
+<a class="back" href="{{url_for('students')}}">← Alumnos</a>
+<div class="card">
+  <h1>Registrar alumno</h1>
+  <p class="muted">Puedes registrar al alumno y sus próximas clases en un solo paso.</p>
+  <form method="post" id="studentForm">
+    <div class="grid">
+      <div>
+        <h3>Datos del alumno y padre/madre</h3>
+        <label>Padre/madre</label><input name="parent_name" required>
+        <label>WhatsApp del padre/madre</label><input name="parent_whatsapp" inputmode="tel" required>
+        <label>Alumno</label><input name="student_name" required>
+        <label>Edad</label><input name="age" type="number" min="3" required>
+        <label>DNI / documento del alumno</label><input name="dni" required>
+        <label>Contraseña inicial del padre/madre</label><input name="parent_password" type="text" placeholder="Déjala vacía para generar una temporal">
+        <p class="small muted">Si el WhatsApp ya tiene una cuenta de padre/madre, se conservará su contraseña actual y este campo no la cambiará.</p>
+      </div>
+      <div>
+        <h3>Entrenamiento</h3>
+        <label>Zona</label><input name="zone" placeholder="Ej. Surco Chama y zonas cercanas" required>
+        <label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
+        <label>Parque o dirección</label><input name="place" placeholder="Lugar de la clase" required>
+        <label>Tarifa por clase (S/)</label><input name="tariff" type="number" step="0.01" value="70" min="0" required>
+        <label>Fotos y videos</label><select name="photo_consent"><option>No, no autorizo</option><option>Sí, autorizo</option></select>
+      </div>
+    </div>
+    <hr>
+    <h3>📅 Clases</h3>
+    <p class="muted">Cada horario genera fechas reales. Puedes agregar varios horarios para el mismo alumno.</p>
+    <div id="groups"></div>
+    <button type="button" class="btn light" onclick="addGroup()">+ Agregar otro horario</button>
+    <hr>
+    <h3>💰 Pago (opcional)</h3>
+    <p class="muted">Si el papá ya pagó, puedes registrarlo ahora. Si todavía no, déjalo pendiente.</p>
+    <label>¿Pago recibido?</label><select name="payment_received" id="payment_received" onchange="togglePay()"><option value="no">No, pagará después</option><option value="yes">Sí, ya pagó</option></select>
+    <div id="paybox" style="display:none">
+      <label>Tipo</label><select name="payment_type" id="payment_type" onchange="togglePayType()"><option value="regular">Pago regular</option><option value="package_8">Paquete de 8 clases — S/520</option></select>
+      <div id="regularAmount"><label>Monto recibido (S/)</label><input name="payment_amount" id="payment_amount" type="number" step="0.01" value="70"></div>
+      <label>Mes / período</label><input name="payment_month" type="month">
+      <label>Medio de pago</label><select name="payment_method"><option>Yape</option><option>Plin</option><option>Efectivo</option><option>Otro</option></select>
+      <label>Nota</label><input name="payment_note" placeholder="Opcional">
+    </div>
+    <button class="btn green" style="margin-top:15px">💾 Guardar alumno y clases</button>
+  </form>
+</div>
+<script>
+let n=0;const days={{days|tojson}};
+function addGroup(){
+ const i=n++;const d=document.createElement('div');d.className='card schedule-group';
+ d.innerHTML=`<h4>Horario ${i+1}</h4><label>Día</label><select class="gd">${days.map(x=>`<option>${x}</option>`).join('')}</select><label>Primera fecha real</label><input type="date" class="gs" required><label>Hora</label><input type="time" class="gt" required><label>Cantidad de clases</label><input type="number" class="gc" min="1" max="52" value="1" required><p class="small muted">Zona, modalidad y lugar se toman de los datos de entrenamiento del alumno.</p><label>Observación</label><input class="gn"><button type="button" class="btn light" onclick="this.closest('.schedule-group').remove()">Eliminar este horario</button>`;
+ document.getElementById('groups').appendChild(d);
+}
+function di(x){return days.indexOf(x)}
+function fd(d){return d.toISOString().slice(0,10)}
+document.getElementById('studentForm').addEventListener('submit',e=>{
+ document.querySelectorAll('.gen').forEach(x=>x.remove());let k=0,ok=true;
+ document.querySelectorAll('.schedule-group').forEach(g=>{
+  const wd=g.querySelector('.gd').value,sv=g.querySelector('.gs').value,t=g.querySelector('.gt').value,c=parseInt(g.querySelector('.gc').value||0);
+  if(!sv||!t||!c)return;
+  const st=new Date(sv+'T12:00:00');
+  if(st.getDay()!==((di(wd)+1)%7)){alert('La primera fecha debe corresponder al día seleccionado: '+wd+'.');ok=false;return;}
+  for(let j=0;j<c;j++){
+   const x=new Date(st);x.setDate(x.getDate()+j*7);const vals={date:fd(x),time:t,notes:g.querySelector('.gn').value.trim()};
+   for(const [key,val] of Object.entries(vals)){const q=document.createElement('input');q.type='hidden';q.name=`class_${key}_${k}`;q.value=val;q.className='gen';e.target.appendChild(q)}k++;
+  }
+ });if(!ok)e.preventDefault();
+});
+addGroup();
+function togglePay(){document.getElementById('paybox').style.display=document.getElementById('payment_received').value==='yes'?'block':'none'}
+function updateRegularAmount(){let total=0;document.querySelectorAll('.schedule-group').forEach(g=>{total+=parseInt(g.querySelector('.gc')?.value||0)});const tariff=parseFloat(document.querySelector('[name=tariff]')?.value||0);if(document.getElementById('payment_type').value==='regular' && tariff>0)document.getElementById('payment_amount').value=(total*tariff).toFixed(2)}
+function togglePayType(){document.getElementById('regularAmount').style.display=document.getElementById('payment_type').value==='regular'?'block':'none';if(document.getElementById('payment_type').value==='package_8')document.getElementById('payment_amount').value=520;else updateRegularAmount()}
+document.getElementById('groups').addEventListener('input',updateRegularAmount);document.querySelector('[name=tariff]').addEventListener('input',updateRegularAmount);
+</script>
+{% endblock %}

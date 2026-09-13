@@ -1,2 +1,59 @@
-{% extends "layout.html" %}{% block content %}<a class="back" href="{{url_for('home')}}">← Volver</a><div class="card"><h2>Solicitar entrenamiento</h2><p class="muted">Completa tus datos. La solicitud se abrirá en WhatsApp para coordinar directamente con Coach Juan Carlos.</p><div class="grid3">{% for p in pricing.new_students %}<div class="stat"><b>{{p.age}}</b><div>{{p.duration}}</div><strong>{{p.price}}</strong></div>{% endfor %}</div><p class="notice">¿Entrenarán 2 o 3 alumnos juntos? Puedes consultarlo por WhatsApp. Las clases son personalizadas.</p><form method="post"><label>Padre/madre o apoderado</label><input name="parent_name" required><label>Tu WhatsApp</label><input name="whatsapp" required><label>Alumno</label><input name="student_name" required><label>Edad</label><input name="age" type="number" min="3" required><label>Zona</label><input id="requestZone" name="zone" placeholder="Ej. Chorrillos" required><p class="small muted">Escribe tu zona o distrito. No está limitada a una lista.</p><div class="notice" id="availableBox"><b>Horarios disponibles esta semana</b><div id="availableList" class="small muted" style="margin-top:7px">Escribe tu zona para mostrar los horarios disponibles.</div></div><label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required><label>Horario de interés</label><input name="schedule" placeholder="Ej. miércoles 5:30 p. m. o por coordinar"><label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option><option>Por coordinar</option></select><button class="btn green" type="submit">📲 Enviar solicitud por WhatsApp</button></form></div><script>
-const publicAvailability={{availability|tojson}};const requestZone=document.getElementById('requestZone'),availableList=document.getElementById('availableList');function renderAvailable(){const z=requestZone.value.trim().toLowerCase();const rows=publicAvailability.filter(a=>!z||a.zone.toLowerCase()===z);if(!z){availableList.textContent='Escribe tu zona para mostrar los horarios disponibles.';return}if(!rows.length){availableList.textContent='No hay horarios publicados para esta zona esta semana. Puedes indicar tu horario de interés y coordinar con Coach Juan Carlos.';return}availableList.innerHTML=rows.map(a=>`<div style="padding:5px 0">📍 ${a.zone} · <b>${a.day}</b> · ${a.time}</div>`).join('')}requestZone.addEventListener('input',renderAvailable);renderAvailable();</script>{% endblock %}
+{% extends "layout.html" %}{% block content %}
+<a class="back" href="{{url_for('home')}}">← Volver</a>
+<div class="card">
+  <h2>Solicitar entrenamiento</h2>
+  <p class="muted">Completa tus datos. Coach Juan Carlos recibirá tu solicitud por WhatsApp para coordinar contigo.</p>
+  <div class="grid3">
+    {% for p in pricing.new_students %}<div class="stat"><b>{{p.age}}</b><div>{{p.duration}}</div><strong>{{p.price}}</strong></div>{% endfor %}
+  </div>
+  <p class="notice">Las clases son personalizadas. Si deseas consultar por otra modalidad, puedes hacerlo directamente con Coach Juan Carlos.</p>
+
+  <form method="post" id="requestForm">
+    <label>Padre/madre o apoderado</label><input name="parent_name" required>
+    <label>Tu WhatsApp</label><input name="whatsapp" inputmode="tel" required>
+    <label>Alumno</label><input name="student_name" required>
+    <label>Edad</label><input name="age" type="number" min="3" required>
+
+    <label>Zona</label>
+    <select id="requestZone" name="zone" required>
+      <option value="">Selecciona tu zona</option>
+      {% for z in zones %}<option value="{{z}}">{{z}}</option>{% endfor %}
+      <option value="__waitlist__">No encuentro mi zona</option>
+    </select>
+    <div id="otherZoneBox" style="display:none"><label>Escribe tu zona</label><input id="otherZone" placeholder="Ej. San Miguel, Chorrillos, etc."></div>
+    <p class="small muted">Las zonas son las que Coach Juan Carlos ha publicado en su disponibilidad.</p>
+
+    <div class="notice" id="availableBox">
+      <b>Horarios disponibles</b>
+      <div id="availableList" class="small muted" style="margin-top:7px">Selecciona tu zona para ver los horarios disponibles.</div>
+      <div id="waitBox" style="display:none;margin-top:10px"><a id="waitLink" class="btn light" href="{{url_for('espera')}}">📝 Solicitar ingreso a lista de espera</a></div>
+    </div>
+
+    <label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
+    <label>Parque o dirección</label><input name="place" placeholder="Escribe el parque o la dirección" required>
+    <label>Horario de interés</label><input name="schedule" placeholder="Ej. miércoles 5:30 p. m. o por coordinar">
+    <label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option><option>Por coordinar</option></select>
+    <button class="btn green" type="submit">📲 Enviar solicitud por WhatsApp</button>
+  </form>
+</div>
+<script>
+const publicAvailability={{availability|tojson}};
+const requestZone=document.getElementById('requestZone');
+const availableList=document.getElementById('availableList');
+const waitBox=document.getElementById('waitBox');
+const otherZoneBox=document.getElementById('otherZoneBox');
+const otherZone=document.getElementById('otherZone');
+const waitLink=document.getElementById('waitLink');
+function updateWaitLink(){const params=new URLSearchParams({parent_name:document.querySelector('[name=parent_name]').value,whatsapp:document.querySelector('[name=whatsapp]').value,student_name:document.querySelector('[name=student_name]').value,age:document.querySelector('[name=age]').value,zone:otherZone.value||''});waitLink.href='{{url_for('espera')}}?'+params.toString()}
+function renderAvailable(){
+  const z=requestZone.value;
+  if(z==='__waitlist__'){otherZoneBox.style.display='block'; availableList.textContent='Si tu zona no está publicada, puedes solicitar ingresar a la lista de espera.'; waitBox.style.display='block'; updateWaitLink(); return;}
+  otherZoneBox.style.display='none'; waitBox.style.display='none';
+  if(!z){availableList.textContent='Selecciona tu zona para ver los horarios disponibles.';return;}
+  const rows=publicAvailability.filter(a=>a.zone===z);
+  if(!rows.length){availableList.textContent='No hay horarios publicados para esta zona por el momento.';return;}
+  availableList.innerHTML=rows.map(a=>`<div style="padding:5px 0">📍 ${a.zone} · <b>${a.day}</b> · ${a.display_time||a.time}</div>`).join('');
+}
+requestZone.addEventListener('change',renderAvailable);['parent_name','whatsapp','student_name','age'].forEach(n=>document.querySelector('[name='+n+']').addEventListener('input',updateWaitLink));otherZone.addEventListener('input',updateWaitLink);renderAvailable();
+</script>
+{% endblock %}
