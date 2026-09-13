@@ -13,6 +13,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-this")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 COACH_WHATSAPP = "51993757225"
 DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+TURN_ORDER = ["Mañana", "Tarde / noche"]
 PERU_TZ = ZoneInfo("America/Lima")
 MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]
 
@@ -78,6 +79,8 @@ def init_db():
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
+    c.execute("ALTER TABLE availability ADD COLUMN IF NOT EXISTS turn TEXT NOT NULL DEFAULT 'Tarde / noche'")
+    c.execute("UPDATE availability SET turn=CASE WHEN CAST(SPLIT_PART(time, ':', 1) AS INTEGER) < 12 THEN 'Mañana' ELSE 'Tarde / noche' END WHERE turn IS NULL OR turn=''")
     merge_duplicate_parent_accounts(c)
     c.commit()
 
@@ -151,6 +154,112 @@ def parse_iso_datetime(d, t):
     return datetime.strptime(f"{d} {t}", "%Y-%m-%d %H:%M").replace(tzinfo=PERU_TZ)
 
 
+def turn_for_time(t):
+    try:
+        return "Mañana" if int((t or "00:00").split(":", 1)[0]) < 12 else "Tarde / noche"
+    except Exception:
+        return "Tarde / noche"
+
+
+def current_week_bounds(ref=None):
+    ref = ref or datetime.now(PERU_TZ).date()
+    monday = ref - timedelta(days=ref.weekday())
+    saturday = monday + timedelta(days=5)
+    return monday, saturday
+
+
+def sync_payment_status(c, student_id=None):
+    # Reconcile legacy classes against recorded payments. A regular payment
+    # covers classes in its month according to the student's tariff; packages
+    # cover up to their remaining sessions. Existing paid links are preserved.
+    students = c.execute("SELECT id, tariff FROM students WHERE status='active'" + (" AND id=%s" if student_id else ""), ((student_id,) if student_id else ())).fetchall()
+    for st in students:
+        tariff = float(st["tariff"] or 0)
+        classes = c.execute("SELECT id,date,payment_id,payment_status FROM classes WHERE student_id=%s ORDER BY date,time,id", (st["id"],)).fetchall()
+        paid_regular = {}
+        if tariff > 0:
+            rows = c.execute("SELECT id,month,amount FROM payments WHERE student_id=%s AND status='paid' AND payment_type='regular' ORDER BY id", (st["id"],)).fetchall()
+            for p in rows:
+                paid_regular[p["month"]] = paid_regular.get(p["month"], 0) + int(float(p["amount"] or 0) // tariff)
+        package_remaining = {}
+        for p in c.execute("SELECT id,sessions_total FROM payments WHERE student_id=%s AND status='paid' AND payment_type='package_8' ORDER BY id", (st["id"],)).fetchall():
+            used = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
+            package_remaining[p["id"]] = max(0, (p["sessions_total"] or 8) - used)
+        for cl in classes:
+            if cl["payment_id"] is not None:
+                c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s", (cl["id"],))
+                continue
+            month = cl["date"][:7]
+            if paid_regular.get(month, 0) > 0:
+                paid_regular[month] -= 1
+                p = c.execute("SELECT id FROM payments WHERE student_id=%s AND status='paid' AND payment_type='regular' AND month=%s ORDER BY id LIMIT 1", (st["id"], month)).fetchone()
+                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (p["id"], cl["id"]))
+                continue
+            assigned = False
+            for pid, remaining in list(package_remaining.items()):
+                if remaining > 0:
+                    package_remaining[pid] -= 1
+                    c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (pid, cl["id"]))
+                    assigned = True
+                    break
+            if not assigned:
+                c.execute("UPDATE classes SET payment_status='pending' WHERE id=%s", (cl["id"],))
+
+
+def reschedule_slots(c, current, today):
+    """Return free recovery slots for the current week, then next week if needed.
+
+    Public availability is never enough by itself: the student's already programmed
+    weekday/time patterns also create punctual recovery spaces. These slots are
+    visible only to existing families (and Coach Juan Carlos).
+    """
+    monday, saturday = current_week_bounds(today)
+    week_starts = [monday]
+    if not any(_free_slot_exists(c, current, monday, saturday, current["id"] ) for _ in [0]):
+        next_monday = monday + timedelta(days=7)
+        week_starts.append(next_monday)
+    slots=[]; seen=set(); zone=(current["student_zone"] or "").strip()
+    av=c.execute("SELECT zone,day,time FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall()
+    candidates=[(a["day"],a["time"],a["zone"]) for a in av]
+    own_patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled')", (current["student_id"],)).fetchall()
+    for row in own_patterns:
+        try: d=date.fromisoformat(row["date"])
+        except Exception: continue
+        if d.weekday()<6: candidates.append((DAYS[d.weekday()],row["time"],zone))
+    for start_day in week_starts:
+        end_day=start_day+timedelta(days=5)
+        for day_name,tm,z in candidates:
+            if day_name not in DAYS: continue
+            d=start_day+timedelta(days=DAYS.index(day_name))
+            if not (today <= d <= end_day): continue
+            key=(d.isoformat(),tm)
+            if key in seen or (d.isoformat()==current["date"] and tm==current["time"]): continue
+            occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1", (d.isoformat(),tm,current["id"])).fetchone()
+            if occupied: continue
+            seen.add(key); slots.append({"date":d.isoformat(),"day":day_name,"time":tm,"zone":z,"turn":turn_for_time(tm)})
+        if slots: break
+    slots.sort(key=lambda x:(x["date"],x["time"]))
+    return slots
+
+
+def _free_slot_exists(c, current, monday, saturday, class_id):
+    # Helper used only to decide whether to offer the next week as fallback.
+    zone=(current["student_zone"] or "").strip()
+    av=c.execute("SELECT day,time FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall()
+    patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled')", (current["student_id"],)).fetchall()
+    candidates={(a["day"],a["time"]) for a in av}
+    for r in patterns:
+        try: d=date.fromisoformat(r["date"]); candidates.add((DAYS[d.weekday()],r["time"]))
+        except Exception: pass
+    for day_name,tm in candidates:
+        if day_name not in DAYS: continue
+        d=monday+timedelta(days=DAYS.index(day_name))
+        if monday <= d <= saturday and d >= datetime.now(PERU_TZ).date():
+            occ=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(d.isoformat(),tm,class_id)).fetchone()
+            if not occ and not (d.isoformat()==current["date"] and tm==current["time"]): return True
+    return False
+
+
 def class_status_label(status):
     return {
         "scheduled": "Programada",
@@ -197,17 +306,18 @@ def nuevo():
         student_name = request.form.get("student_name", "").strip()
         age = request.form.get("age", "").strip()
         zone = request.form.get("zone", "").strip()
+        turn = request.form.get("turn", "").strip()
         mode = request.form.get("mode", "").strip()
         place = request.form.get("place", "").strip()
         schedule = request.form.get("schedule", "").strip()
         photo_consent = request.form.get("photo_consent", "").strip()
-        if not parent_name or not whatsapp or not student_name or not age or not zone or not place:
+        if not parent_name or not whatsapp or not student_name or not age or not zone or not place or not turn:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
         message = (
             "⚽ Hola, Coach Juan Carlos. Quiero solicitar un entrenamiento de fútbol.\n\n"
             f"Padre/madre: {parent_name}\nWhatsApp: {whatsapp}\nAlumno: {student_name}\nEdad: {age}\n"
             f"Zona: {zone}\nModalidad: {mode}\nParque o dirección: {place}\n"
-            f"Horario de interés: {schedule or 'Por coordinar'}\nFotos/videos: {photo_consent or 'Por coordinar'}"
+            f"Turno preferido: {turn}\nHorario de interés: {schedule or 'Por coordinar'}\nFotos/videos: {photo_consent or 'Por coordinar'}"
         )
         c.close()
         return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
@@ -222,9 +332,9 @@ def nuevo():
     for a in availability_rows:
         if a["zone"] not in seen:
             zones.append(a["zone"]); seen.add(a["zone"])
-        public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"])})
+        public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
     c.close()
-    return render_template("new.html", availability=public_availability, zones=zones)
+    return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER)
 
 
 @app.route("/espera", methods=["GET", "POST"])
@@ -279,10 +389,12 @@ def coach_login():
 def dashboard():
     c = db(); today = datetime.now(PERU_TZ).date().isoformat()
     students = c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall()
+    sync_payment_status(c)
+    monday, saturday = current_week_bounds(datetime.now(PERU_TZ).date())
     classes = c.execute("""SELECT classes.*, students.student_name FROM classes
         LEFT JOIN students ON students.id=classes.student_id
-        WHERE classes.date >= %s AND classes.status IN ('scheduled','rescheduled','postponed')
-        ORDER BY classes.date,classes.time LIMIT 20""", (today,)).fetchall()
+        WHERE classes.date > %s AND classes.date <= %s AND classes.status IN ('scheduled','rescheduled','postponed')
+        ORDER BY classes.date,classes.time LIMIT 50""", (today, saturday.isoformat())).fetchall()
     today_classes = c.execute("""SELECT classes.*,students.student_name FROM classes
         LEFT JOIN students ON students.id=classes.student_id WHERE classes.date=%s
         ORDER BY classes.time""", (today,)).fetchall()
@@ -493,7 +605,9 @@ def edit_student(sid):
 @app.route("/entrenador/alumno/<int:sid>")
 @coach_required
 def student_detail(sid):
-    c = db(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
+    c = db()
+    sync_payment_status(c, sid)
+    c.commit(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
     if not s:
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
     classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC", (sid,)).fetchall()
@@ -559,6 +673,7 @@ def new_class():
 @coach_required
 def payments():
     c=db()
+    sync_payment_status(c)
     if request.method=="POST":
         sid=request.form["student_id"]; ptype=request.form.get("payment_type","regular"); amount=service_amount(request.form.get("amount"))
         total=1
@@ -579,7 +694,7 @@ def payments():
         ids=[r["id"] for r in to_link]
         if ids:
             c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)",(pid,ids))
-        c.commit(); flash("Pago registrado correctamente.")
+        c.commit(); sync_payment_status(c); c.commit(); flash("Pago registrado correctamente.")
     rows=c.execute("SELECT payments.*,students.student_name FROM payments LEFT JOIN students ON students.id=payments.student_id ORDER BY payments.month DESC,payments.id DESC").fetchall()
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall()
     package_info=[]
@@ -597,11 +712,12 @@ def availability():
     c=db()
     if request.method=="POST":
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
+        turn=request.form.get("turn","").strip() or turn_for_time(time)
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
-        c.execute("INSERT INTO availability(zone,day,time,active) VALUES(%s,%s,%s,TRUE)",(zone,day,time)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
+        c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall(); c.close()
-    return render_template("availability.html",availability=av,days=DAYS)
+    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
@@ -656,6 +772,8 @@ def change_password():
 def parent_home():
     if session.get("role") != "parent": return redirect(url_for("parent_login"))
     c = db(); user_id = session["user_id"]; today = datetime.now(PERU_TZ).date().isoformat()
+    sync_payment_status(c)
+    c.commit()
     children = c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' ORDER BY student_name", (user_id,)).fetchall()
     if not children:
         c.close(); flash("No hay alumnos asociados a esta cuenta."); return redirect(url_for("logout"))
@@ -715,24 +833,39 @@ def reschedule(class_id):
         try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
         except (ValueError,IndexError): c.close(); flash("La fecha seleccionada no es válida."); return redirect(url_for("reschedule",class_id=class_id))
         if selected<today or selected>end: c.close(); flash("Solo puedes elegir horarios disponibles de esta semana."); return redirect(url_for("reschedule",class_id=class_id))
-        allowed=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s LIMIT 1",(zone,selected_day,new_time)).fetchone()
-        occupied=c.execute("""SELECT 1 FROM classes c2 JOIN students s2 ON s2.id=c2.student_id
-            WHERE c2.date=%s AND c2.time=%s AND c2.status IN ('scheduled','rescheduled') AND c2.id<>%s AND s2.zone=%s LIMIT 1""",(new_date,new_time,class_id,zone)).fetchone()
-        if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para tu zona."); return redirect(url_for("reschedule",class_id=class_id))
+        available_slots=reschedule_slots(c,current,today)
+        allowed=any(x["date"]==new_date and x["time"]==new_time for x in available_slots)
+        occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
+        if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
         old_date=current["date"]; old_time=current["time"]
         c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id)); c.commit(); c.close()
         message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nReprograma clase del día {display_date(old_date)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
         return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
-    av=c.execute("SELECT * FROM availability WHERE active=TRUE AND zone=%s ORDER BY CASE day WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time",(current["student_zone"],)).fetchall()
-    slots=[]
-    for a in av:
-        idx=DAYS.index(a["day"]); d=monday+timedelta(days=idx)
-        if today<=d<=end:
-            occupied=c.execute("""SELECT 1 FROM classes c2 JOIN students s2 ON s2.id=c2.student_id
-                WHERE c2.date=%s AND c2.time=%s AND c2.status IN ('scheduled','rescheduled') AND c2.id<>%s AND s2.zone=%s LIMIT 1""",(d.isoformat(),a["time"],class_id,current["student_zone"])).fetchone()
-            if not occupied and not (d.isoformat()==current["date"] and a["time"]==current["time"]): slots.append({"date":d.isoformat(),"day":a["day"],"time":a["time"]})
+    slots=reschedule_slots(c,current,today)
     c.close(); return render_template("reschedule.html",current=current,slots=slots)
 
+
+
+@app.route("/entrenador/clase/<int:class_id>/reprogramar", methods=["GET","POST"])
+@coach_required
+def coach_reschedule(class_id):
+    c=db()
+    current=c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone,students.parent_name
+        FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s""",(class_id,)).fetchone()
+    if not current: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    if request.method=="POST":
+        new_date=request.form.get("date","").strip(); new_time=request.form.get("time","").strip()
+        try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
+        except (ValueError,IndexError): c.close(); flash("Fecha no válida."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        slots=reschedule_slots(c,current,datetime.now(PERU_TZ).date())
+        if not any(x["date"]==new_date and x["time"]==new_time for x in slots):
+            c.close(); flash("Ese horario no está disponible para reprogramar."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        old_date,old_time=current["date"],current["time"]
+        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+        c.commit(); c.close()
+        return redirect(url_for("student_detail",sid=current["student_id"]))
+    slots=reschedule_slots(c,current,datetime.now(PERU_TZ).date()); c.close()
+    return render_template("reschedule.html",current=current,slots=slots,coach_mode=True)
 
 @app.route("/logout")
 def logout(): session.clear(); return redirect(url_for("home"))
