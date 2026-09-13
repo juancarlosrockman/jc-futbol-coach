@@ -17,7 +17,13 @@
       </div>
       <div>
         <h3>Entrenamiento</h3>
-        <label>Zona</label><input name="zone" placeholder="Ej. Surco Chama y zonas cercanas" required>
+        <div class="field"><label for="turno">Turno</label>
+<select id="turno" name="turno">
+<option value="">Selecciona un turno</option>
+<option value="morning">Mañana</option>
+<option value="afternoon_evening">Tarde / noche</option>
+</select></div>
+<label>Zona</label><input name="zone" placeholder="Ej. Surco Chama y zonas cercanas" required>
         <label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select>
         <label>Parque o dirección</label><input name="place" placeholder="Lugar de la clase" required>
         <label>Tarifa por clase (S/)</label><input name="tariff" type="number" step="0.01" value="70" min="0" required>
