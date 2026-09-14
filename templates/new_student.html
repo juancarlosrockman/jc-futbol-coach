@@ -67,8 +67,8 @@ document.getElementById('studentForm').addEventListener('submit',e=>{
 });
 addGroup();
 function togglePay(){document.getElementById('paybox').style.display=document.getElementById('payment_received').value==='yes'?'block':'none'}
-function updateRegularAmount(){let total=0;document.querySelectorAll('.schedule-group').forEach(g=>{total+=parseInt(g.querySelector('.gc')?.value||0)});const tariff=parseFloat(document.querySelector('[name=tariff]')?.value||0);if(document.getElementById('payment_type').value==='regular' && tariff>0)document.getElementById('payment_amount').value=(total*tariff).toFixed(2)}
+function updateRegularAmount(){let total=0;document.querySelectorAll('.schedule-group').forEach(g=>{total+=parseInt(g.querySelector('.gc')?.value||0)});const tariff=parseFloat(document.querySelector('[name=tariff]')?.value||0);const a=document.getElementById('payment_amount');if(document.getElementById('payment_type').value==='regular' && tariff>0 && !a.dataset.edited)a.value=(Math.max(1,total)*tariff).toFixed(2)}
 function togglePayType(){document.getElementById('regularAmount').style.display=document.getElementById('payment_type').value==='regular'?'block':'none';if(document.getElementById('payment_type').value==='package_8')document.getElementById('payment_amount').value=520;else updateRegularAmount()}
-document.getElementById('groups').addEventListener('input',updateRegularAmount);document.querySelector('[name=tariff]').addEventListener('input',updateRegularAmount);
+document.getElementById('payment_amount').addEventListener('input',e=>e.target.dataset.edited='1');document.getElementById('groups').addEventListener('input',updateRegularAmount);document.querySelector('[name=tariff]').addEventListener('input',()=>{document.getElementById('payment_amount').dataset.edited='';updateRegularAmount()});
 </script>
 {% endblock %}

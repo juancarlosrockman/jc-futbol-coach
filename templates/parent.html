@@ -1,19 +1,104 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="parent-head"><div class="row"><button class="icon-btn" onclick="document.getElementById('drawer').classList.add('open')">☰</button><img class="app-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><div class="row" style="gap:7px"><span style="font-size:20px">♧</span><span class="avatar">{{children[0].student.parent_name[:1]|upper}}</span></div></div></div>
-<div class="parent-greeting"><h1>Hola, {{children[0].student.parent_name.split()[0]}} 👋</h1><p>Aquí puedes ver la información de tus clases.</p></div>
+<div class="parent-head">
+  <div class="row">
+    <button class="icon-btn" aria-label="Abrir menú" onclick="document.getElementById('drawer').classList.add('open')">☰</button>
+    <img class="app-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman">
+    <div class="row" style="gap:7px"><span style="font-size:19px">♧</span><span class="avatar">{{children[0].student.parent_name[:1]|upper}}</span></div>
+  </div>
+</div>
+<div class="parent-greeting">
+  <h1>Hola, {{children[0].student.parent_name.split()[0]}} 👋</h1>
+  <p>Aquí puedes ver la información de tus clases.</p>
+</div>
+
+{% if children|length > 1 %}
+<div class="card child-selector-card">
+  <label>Alumno seleccionado</label>
+  <select id="childSelect" onchange="selectChild(this.value)">
+    {% for child in children %}<option value="{{loop.index0}}">{{child.student.student_name}} · {{child.student.age}} años</option>{% endfor %}
+  </select>
+</div>
+{% endif %}
+
 {% for child in children %}
-<div class="card" style="padding:10px;margin-top:16px"><div class="child-card"><div class="child-avatar">{{child.student.student_name[:1]|upper}}</div><div class="child-info"><b>{{child.student.student_name}}</b><small>{{child.student.age}} años</small></div><a class="profile-btn" href="#perfil">Ver perfil</a></div>
-{% if loop.first and child.upcoming %}{% set nxt=child.upcoming[0] %}<div class="next-card"><div class="next-title">Próxima clase</div><div class="next-line"><div class="next-icon">▣</div><div><b>{{display_day(nxt.date)}} {{display_date(nxt.date)}}</b><span>{{display_time(nxt.time)}}</span></div></div><div class="next-line"><div class="next-icon">●</div><div><b>{{nxt.place or child.student.place or 'Lugar por indicar'}}</b><span>{{child.student.zone or 'Zona por indicar'}}</span></div></div>{% if nxt.id==child.reprogrammable_id %}<a class="btn green full-green" href="{{url_for('reschedule',class_id=nxt.id)}}">Reprogramar</a>{% endif %}</div>{% endif %}</div>
+<section class="child-view" data-child="{{loop.index0}}" {% if not loop.first %}style="display:none"{% endif %}>
+  <div class="card" style="padding:10px;margin-top:10px">
+    <div class="child-card">
+      <div class="child-avatar">{{child.student.student_name[:1]|upper}}</div>
+      <div class="child-info"><b>{{child.student.student_name}}</b><small>{{child.student.age}} años · {{child.student.zone or 'Zona por indicar'}}</small></div>
+      <a class="profile-btn" href="#perfil">Ver perfil</a>
+    </div>
+    <div class="next-card">
+      <div class="next-title">Próxima clase</div>
+      {% if child.upcoming %}{% set nxt=child.upcoming[0] %}
+      <div class="next-line"><div class="next-icon">▣</div><div><b>{{display_day(nxt.date)}} {{display_date(nxt.date)}}</b><span>{{display_time(nxt.time)}}</span></div></div>
+      <div class="next-line"><div class="next-icon">●</div><div><b>{{nxt.place or child.student.place or 'Lugar por indicar'}}</b><span>{{child.student.zone or 'Zona por indicar'}}</span></div></div>
+      {% if nxt.id==child.reprogrammable_id %}<a class="btn green full-green" href="{{url_for('reschedule',class_id=nxt.id)}}">Reprogramar</a>{% endif %}
+      {% else %}<div class="notice">No tienes una próxima clase registrada.</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="summary-grid">
+    <div class="stat"><span class="muted">Clases agendadas</span><div class="big">{{child.scheduled_count}}</div></div>
+    <div class="stat"><span class="muted">Clases pagadas</span><div class="big">{{child.paid_count}}</div></div>
+    <div class="stat"><span class="muted">Realizadas este mes</span><div class="big">{{child.month_attended}}</div></div>
+    <div class="stat"><span class="muted">Pago del mes</span><div class="big">S/ {{child.current_paid|int}}</div></div>
+  </div>
+
+  {% if child.pending_count > 0 %}
+  <div class="notice" style="margin-top:10px">⚠️ Tienes <b>{{child.pending_count}} clase(s)</b> agendada(s) aún no cubiertas por un pago registrado. Coach Juan Carlos puede haberlas dejado programadas como adicionales.</div>
+  {% endif %}
+
+  <div class="card classes-section">
+    <div class="row"><h2 class="section-title">Mis clases</h2><span class="pill light">{{child.scheduled_count}} agendadas</span></div>
+    <p class="muted small">Las clases se agendan por período mensual. Aquí aparecen las próximas clases registradas para {{child.student.student_name}}.</p>
+    <div class="tabs"><button type="button" class="tab active" onclick="showTab({{loop.index0}},'next',this)">Próximas</button><button type="button" class="tab" onclick="showTab({{loop.index0}},'history',this)">Historial</button></div>
+    <div class="tab-panel" data-tab="next">
+      {% for x in child.upcoming %}
+      <div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span><span>{{child.student.zone or ''}}</span></div><span class="pill {% if x.payment_status=='paid' %}ok{% else %}warn{% endif %}">{{'Pagada' if x.payment_status=='paid' else 'Pendiente'}}</span><span class="arrow">›</span></div>
+      {% else %}<p class="muted">No tienes próximas clases registradas.</p>{% endfor %}
+    </div>
+    <div class="tab-panel" data-tab="history" style="display:none">
+      {% for x in child.history %}<div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_date(x.date)}} · {{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span></div><span class="pill {% if x.status=='attended' %}ok{% elif x.status=='cancelled' %}danger{% endif %}">{{class_status_label(x.status)}}</span></div>{% else %}<p class="muted">Aún no hay historial.</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="card payments-section">
+    <div class="row"><div><h2 class="section-title">Mis pagos</h2><p class="muted small">Resumen de pagos y clases del período.</p></div><span class="pill {% if child.current_paid>0 %}ok{% else %}warn{% endif %}">{{'Pagado' if child.current_paid>0 else 'Pendiente'}}</span></div>
+    <div class="payment-card">
+      <div class="small muted">Clases y pagos del período actual</div>
+      <h3>Clases agendadas · {{child.month_scheduled}}</h3>
+      <div class="pay-stat"><span>Clases cubiertas por pagos</span><b>{{child.month_paid_classes}}</b></div>
+      <div class="pay-stat"><span>Clases realizadas</span><b>{{child.month_attended}}</b></div>
+      <div class="pay-stat"><span>Clases aún pendientes de pago</span><b>{{[child.month_scheduled-child.month_paid_classes,0]|max}}</b></div>
+      <hr style="border:0;border-top:1px solid var(--line)">
+      <div class="small muted">Total pagado este mes</div>
+      <div class="pay-total">S/ {{child.current_paid|int}}</div>
+      <p class="small muted" style="margin-bottom:0">La tarifa puede ser diferente para cada alumno.</p>
+    </div>
+    <h3 style="margin:18px 0 8px">Historial de pagos</h3>
+    {% for p in child.payments %}<div class="stat" style="margin-top:8px"><div class="row"><b>{{p.month}}</b><span class="pill ok">{{'Pagado' if p.status=='paid' else 'Pendiente'}}</span></div><b>S/ {{p.amount|int}}</b><div class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}}</div></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}
+  </div>
+</section>
 {% endfor %}
-<div class="quick-grid" style="margin-top:10px"><a class="quick" href="#clases"><span class="qico">▣</span><b>Mis clases</b><small>Ver historial</small></a><a class="quick" href="#pagos"><span class="qico">▤</span><b>Mis pagos</b><small>Plan y pagos</small></a><a class="quick" href="{{url_for('nuevo')}}"><span class="qico">⊕</span><b>Solicitar clase</b><small>Revisa disponibilidad</small></a><a class="quick" href="{{url_for('espera')}}"><span class="qico">◷</span><b>Lista de espera</b><small>Únete si no hay horario</small></a></div>
 
-<div class="card" id="clases"><h2 class="section-title">Mis clases</h2><p class="muted small">Aquí puedes ver tus clases programadas.</p>{% for child in children %}<div class="notice" style="margin-top:10px"><b>{{child.student.student_name}}</b></div>{% for x in child.upcoming %}<div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split()[0]}}</b></div><div class="class-main"><b>{{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span><span>{{child.student.zone or ''}}</span></div><span class="pill ok">{{class_status_label(x.status)}}</span><span class="arrow">›</span></div>{% else %}<p class="muted">No tienes próximas clases registradas.</p>{% endfor %}{% endfor %}</div>
-
-<div class="card" id="pagos"><h2 class="section-title">Mis pagos</h2><p class="muted small">Resumen y control de tus pagos.</p>{% for child in children %}{% for p in child.packages %}<div class="payment-card"><div class="small muted">Plan actual</div><h3>8 sesiones</h3><div class="pay-stat"><span>Sesiones realizadas</span><b>{{p.attended}}</b></div><div class="pay-stat"><span>Sesiones restantes</span><b>{{p.remaining}}</b></div><div class="pay-stat"><span>Tarifa</span><b>S/ 65 por sesión</b></div><hr style="border:0;border-top:1px solid var(--line)"><div class="small muted">Próximo pago</div><div class="pay-total">S/ 520 <span class="pill danger" style="font-size:10px">Pendiente</span></div><a class="btn green full-green" href="#">Pagar / Enviar comprobante</a></div>{% endfor %}{% for p in child.payments %}<div class="stat" style="margin-top:8px"><div class="row"><b>{{p.month}}</b><span class="pill ok">Pagado</span></div><b>S/ {{p.amount|int}}</b><div class="small muted">{{'Paquete de 8 sesiones' if p.payment_type=='package_8' else 'Pago regular'}}</div></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}{% endfor %}</div>
+<div class="quick-grid" style="margin-top:10px">
+  <a class="quick" href="#clases" onclick="goSection('clases');return false"><span class="qico">▣</span><b>Mis clases</b><small>Próximas e historial</small></a>
+  <a class="quick" href="#pagos" onclick="goSection('pagos');return false"><span class="qico">▤</span><b>Mis pagos</b><small>Clases y pagos</small></a>
+  <a class="quick" href="{{url_for('nuevo')}}"><span class="qico">⊕</span><b>Solicitar clase</b><small>Nueva solicitud</small></a>
+  <a class="quick" href="{{url_for('espera')}}"><span class="qico">◷</span><b>Lista de espera</b><small>Si no hay horario</small></a>
+</div>
 
 <div class="card" id="perfil"><h2 class="section-title">Mis datos</h2><p><b>{{children[0].student.parent_name}}</b><br>{{children[0].student.parent_whatsapp}}</p><a class="btn light" href="{{url_for('change_password')}}">Cambiar contraseña</a></div>
 <div class="card" style="text-align:center"><a class="back" href="{{url_for('logout')}}">Cerrar sesión</a></div>
 
-<div class="drawer" id="drawer" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('drawer').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a class="active" href="{{url_for('parent_home')}}">⌂ &nbsp; Inicio</a><a href="#clases" onclick="document.getElementById('drawer').classList.remove('open')">▣ &nbsp; Mis clases</a><a href="#pagos" onclick="document.getElementById('drawer').classList.remove('open')">▤ &nbsp; Mis pagos</a><a href="{{url_for('nuevo')}}">⊕ &nbsp; Solicitar clase</a><a href="#">⟳ &nbsp; Reprogramar</a><a href="{{url_for('espera')}}">◷ &nbsp; Lista de espera</a><a href="#perfil" onclick="document.getElementById('drawer').classList.remove('open')">♙ &nbsp; Mis datos</a><a href="{{url_for('contacto_whatsapp')}}">? &nbsp; Ayuda / Contacto</a><div class="spacer"></div><a href="{{url_for('logout')}}">⇥ &nbsp; Cerrar sesión</a><div class="coach-mini">JC Fútbol Coach · Coach Juan Carlos</div></div></div>
+<div class="drawer" id="drawer" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('drawer').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a class="active" href="{{url_for('parent_home')}}">⌂ &nbsp; Inicio</a><a href="#clases" onclick="goSection('clases');return false">▣ &nbsp; Mis clases</a><a href="#pagos" onclick="goSection('pagos');return false">▤ &nbsp; Mis pagos</a><a href="{{url_for('nuevo')}}">⊕ &nbsp; Solicitar clase</a><a href="#" onclick="document.getElementById('drawer').classList.remove('open');document.querySelector('.next-card .full-green')?.click();return false">⟳ &nbsp; Reprogramar</a><a href="{{url_for('espera')}}">◷ &nbsp; Lista de espera</a><a href="#perfil" onclick="document.getElementById('drawer').classList.remove('open')">♙ &nbsp; Mis datos</a><a href="{{url_for('contacto_whatsapp')}}">? &nbsp; Ayuda / Contacto</a><div class="spacer"></div><a href="{{url_for('logout')}}">⇥ &nbsp; Cerrar sesión</a><div class="coach-mini">JC Fútbol Coach · Coach Juan Carlos</div></div></div>
+<script>
+function setSectionIds(){document.querySelectorAll('.classes-section,.payments-section').forEach(x=>x.removeAttribute('id'));const active=document.querySelector('.child-view[style*="display: block"],.child-view:not([style*="display: none"])');if(active){active.querySelector('.classes-section').id='clases';active.querySelector('.payments-section').id='pagos'}}
+function selectChild(i){document.querySelectorAll('.child-view').forEach(x=>x.style.display=x.dataset.child===String(i)?'block':'none');setSectionIds();window.scrollTo({top:0,behavior:'smooth'})}
+function goSection(which){setSectionIds();const el=document.getElementById(which);if(el)el.scrollIntoView({behavior:'smooth',block:'start'});document.getElementById('drawer')?.classList.remove('open')}
+function showTab(child,tab,btn){const section=document.querySelector('.child-view[data-child="'+child+'"]');section.querySelectorAll('.tab-panel').forEach(p=>p.style.display=p.dataset.tab===tab?'block':'none');section.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active')}
+setSectionIds();
+</script>
 {% endblock %}
