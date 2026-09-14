@@ -162,8 +162,14 @@ def turn_for_time(t):
 
 
 def current_week_bounds(ref=None):
+    # The coaching week runs Monday through Saturday.
+    # On Sunday there is no active coaching week, so the dashboard
+    # should show the upcoming Monday-Saturday agenda instead.
     ref = ref or datetime.now(PERU_TZ).date()
-    monday = ref - timedelta(days=ref.weekday())
+    if ref.weekday() == 6:  # Sunday
+        monday = ref + timedelta(days=1)
+    else:
+        monday = ref - timedelta(days=ref.weekday())
     saturday = monday + timedelta(days=5)
     return monday, saturday
 
@@ -790,7 +796,9 @@ def parent_home():
                 assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
                 attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
                 packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8)-assigned)})
-        child_data.append({"student": s, "upcoming": upcoming, "history": history, "payments": payments_rows, "packages": packages})
+        # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
+        reprogrammable_id = upcoming[0]["id"] if upcoming else None
+        child_data.append({"student": s, "upcoming": upcoming, "history": history, "payments": payments_rows, "packages": packages, "reprogrammable_id": reprogrammable_id})
     c.close(); return render_template("parent.html", children=child_data)
 
 
