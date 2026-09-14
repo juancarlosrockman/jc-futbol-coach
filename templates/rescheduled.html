@@ -1,1 +1,24 @@
-{% extends "layout.html" %}{% block content %}<div class="card center"><h1>✓ Clase reprogramada</h1><p><b>{{current.student_name}}</b></p><p class="muted">Original: {{display_date(old_date)}} · {{display_time(current.original_time or current.time)}}</p><p><b>Nueva fecha:</b> {{display_day(new_date)}} {{display_date(new_date)}}<br><b>Nueva hora:</b> {{display_time(new_time)}}<br><b>Zona:</b> {{zone}}</p><p class="notice">La nueva fecha quedó registrada. También puedes avisar a Coach Juan Carlos por WhatsApp.</p><a class="btn green" href="{{whatsapp_url}}">📲 Avisar por WhatsApp</a><a class="btn light" href="{{url_for('parent_home')}}">Volver a mis clases</a></div>{% endblock %}
+{% extends "layout.html" %}
+{% block content %}
+<a class="back" href="{{url_for('parent_home')}}">← Volver</a>
+<div class="card center">
+  {% if request_mode %}
+    <div style="font-size:42px">📲</div>
+    <h1>Solicitud enviada</h1>
+    <p class="muted">Has seleccionado un horario para {{current.student_name}}. Coach Juan Carlos debe confirmar la clase antes de que quede agendada.</p>
+  {% else %}
+    <div style="font-size:42px">✅</div>
+    <h1>Clase reprogramada</h1>
+    <p class="muted">La nueva fecha y hora quedaron registradas en la aplicación.</p>
+  {% endif %}
+  <div class="notice" style="text-align:left;margin-top:15px">
+    <b>Alumno:</b> {{current.student_name}}<br>
+    <b>Zona:</b> {{zone or 'Por indicar'}}<br>
+    {% if not request_mode %}<b>Clase anterior:</b> {{display_date(old_date)}} · {{display_time(current.time)}}<br>{% endif %}
+    <b>{{'Fecha solicitada' if request_mode else 'Nueva fecha'}}:</b> {{display_date(new_date)}}<br>
+    <b>{{'Hora solicitada' if request_mode else 'Nueva hora'}}:</b> {{display_time(new_time)}}
+  </div>
+  <a class="btn green" href="{{whatsapp_url}}">📲 Enviar a Coach Juan Carlos por WhatsApp</a>
+  <br><a class="back" href="{{url_for('parent_home')}}">Volver a mis clases</a>
+</div>
+{% endblock %}
