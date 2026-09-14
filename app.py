@@ -153,8 +153,11 @@ def merge_duplicate_parent_accounts(c):
     for key, group in by_phone.items():
         if len(group) < 2:
             continue
-        keep = group[0]
-        for duplicate in group[1:]:
+        # Keep the account that already has a password when possible, otherwise the oldest.
+        keep = next((u for u in group if u["password"]), group[0])
+        for duplicate in group:
+            if duplicate["id"] == keep["id"]:
+                continue
             c.execute("UPDATE students SET user_id=%s WHERE user_id=%s", (keep["id"], duplicate["id"]))
             c.execute("DELETE FROM users WHERE id=%s AND role='parent'", (duplicate["id"],))
 
@@ -239,38 +242,128 @@ def sync_payment_status(c, student_id=None):
                 c.execute("UPDATE classes SET payment_status='pending' WHERE id=%s", (cl["id"],))
 
 
+def _next_weekday_on_or_after(today, weekday):
+    return today + timedelta(days=(weekday - today.weekday()) % 7)
+
+
+def automatic_recovery_slots(c, student_id=None, today=None, horizon_days=45):
+    """Build recovery spaces after the end of each existing weekday/time series."""
+    today = today or datetime.now(PERU_TZ).date()
+    horizon = today + timedelta(days=horizon_days)
+    query = "SELECT DISTINCT date,time FROM classes WHERE status IN ('scheduled','rescheduled','postponed')"
+    params = ()
+    if student_id is not None:
+        query += " AND student_id=%s"
+        params = (student_id,)
+    rows = c.execute(query, params).fetchall()
+    pattern_dates = {}
+    for r in rows:
+        try:
+            d = date.fromisoformat(r["date"])
+        except Exception:
+            continue
+        key = (DAYS[d.weekday()], r["time"])
+        pattern_dates.setdefault(key, set()).add(d)
+
+    slots = []
+    seen = set()
+    now = datetime.now(PERU_TZ)
+    for (day_name, tm), dates in pattern_dates.items():
+        if len(dates) < 2:
+            continue
+        last_date = max(dates)
+        weekday = DAYS.index(day_name)
+        d = _next_weekday_on_or_after(today, weekday)
+        while d <= last_date:
+            d += timedelta(days=7)
+        while d <= horizon:
+            if d == today and tm <= now.strftime("%H:%M"):
+                d += timedelta(days=7)
+                continue
+            key = (d.isoformat(), tm)
+            occupied = c.execute(
+                "SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",
+                (d.isoformat(), tm)
+            ).fetchone()
+            if not occupied and key not in seen:
+                seen.add(key)
+                slots.append({
+                    "date": d.isoformat(), "day": day_name, "time": tm,
+                    "turn": turn_for_time(tm), "kind": "recovery"
+                })
+            d += timedelta(days=7)
+    slots.sort(key=lambda x: (x["date"], x["time"]))
+    return slots
+
+
 def reschedule_slots(c, current, today):
     """Return public and automatic recovery slots for an existing student."""
     today = today if isinstance(today, date) else date.fromisoformat(str(today))
     horizon = today + timedelta(days=45)
     zone = (current["student_zone"] or "").strip()
-    candidates=[]; seen_candidates=set()
-    # Public availability is available for reprogramming when it matches the student's zone.
+    slots = []
+    seen = set()
+    now = datetime.now(PERU_TZ)
     for a in c.execute("SELECT zone,day,time,turn FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall():
-        key=(a["day"],a["time"])
-        if key not in seen_candidates:
-            candidates.append((a["day"],a["time"],zone,"public")); seen_candidates.add(key)
-    # Existing weekday/time patterns create automatic recovery spaces after the programmed series.
-    patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled','postponed')",(current["student_id"],)).fetchall()
-    for r in patterns:
-        try: d0=date.fromisoformat(r["date"])
-        except Exception: continue
-        key=(DAYS[d0.weekday()],r["time"])
-        if key not in seen_candidates:
-            candidates.append((key[0],key[1],zone,"recovery")); seen_candidates.add(key)
-    slots=[]; seen=set()
-    for day_name,tm,z,kind in candidates:
-        if day_name not in DAYS: continue
-        d=today+timedelta(days=(DAYS.index(day_name)-today.weekday())%7)
-        while d<=horizon:
-            if d>=today and not (d.isoformat()==current["date"] and tm==current["time"]):
-                occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(d.isoformat(),tm,current["id"])).fetchone()
-                key=(d.isoformat(),tm)
-                if not occupied and key not in seen:
-                    seen.add(key); slots.append({"date":d.isoformat(),"day":day_name,"time":tm,"zone":z,"turn":turn_for_time(tm),"kind":kind})
-            d+=timedelta(days=7)
-    slots.sort(key=lambda x:(x["date"],x["time"]))
+        if a["day"] not in DAYS:
+            continue
+        weekday = DAYS.index(a["day"])
+        d = _next_weekday_on_or_after(today, weekday)
+        while d <= horizon:
+            key = (d.isoformat(), a["time"])
+            if d == today and a["time"] <= now.strftime("%H:%M"):
+                d += timedelta(days=7)
+                continue
+            occupied = c.execute(
+                "SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",
+                (d.isoformat(), a["time"], current["id"])
+            ).fetchone()
+            if not occupied and key not in seen and not (d.isoformat() == current["date"] and a["time"] == current["time"]):
+                seen.add(key)
+                slots.append({"date": d.isoformat(), "day": a["day"], "time": a["time"], "zone": zone, "turn": a.get("turn") or turn_for_time(a["time"]), "kind": "public"})
+            d += timedelta(days=7)
+
+    for x in automatic_recovery_slots(c, current["student_id"], today, 45):
+        key = (x["date"], x["time"])
+        if key not in seen and not (x["date"] == current["date"] and x["time"] == current["time"]):
+            seen.add(key)
+            x["zone"] = zone
+            slots.append(x)
+    slots.sort(key=lambda x: (x["date"], x["time"]))
     return slots
+
+
+def current_student_slots(c, student, today=None, horizon_days=45):
+    """Horarios publicados para un alumno actual, limitados a su zona."""
+    today = today or datetime.now(PERU_TZ).date()
+    zone = (student["zone"] or "").strip()
+    if not zone:
+        return []
+    now = datetime.now(PERU_TZ)
+    slots = []
+    seen = set()
+    av = c.execute("SELECT zone,day,time,turn FROM availability WHERE active=TRUE AND zone=%s", (zone,)).fetchall()
+    for a in av:
+        if a["day"] not in DAYS:
+            continue
+        weekday = DAYS.index(a["day"])
+        d = _next_weekday_on_or_after(today, weekday)
+        while d <= today + timedelta(days=horizon_days):
+            if d == today and a["time"] <= now.strftime("%H:%M"):
+                d += timedelta(days=7)
+                continue
+            key = (d.isoformat(), a["time"])
+            occupied = c.execute(
+                "SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",
+                (d.isoformat(), a["time"])
+            ).fetchone()
+            if not occupied and key not in seen:
+                seen.add(key)
+                slots.append({"date": d.isoformat(), "day": a["day"], "time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"]), "zone": zone})
+            d += timedelta(days=7)
+    slots.sort(key=lambda x: (x["date"], x["time"]))
+    return slots
+
 
 def class_status_label(status):
     return {
@@ -325,11 +418,25 @@ def nuevo():
         photo_consent = request.form.get("photo_consent", "").strip()
         if not parent_name or not whatsapp or not student_name or not age or not zone or not place or not turn:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
+        if turn not in TURN_ORDER:
+            c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
+        schedule_day, schedule_time = "", ""
+        if schedule:
+            try:
+                schedule_day, schedule_time = schedule.split("|", 1)
+                datetime.strptime(schedule_time, "%H:%M")
+            except (ValueError, TypeError):
+                c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
+            valid_slot=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s AND turn=%s LIMIT 1",(zone,schedule_day,schedule_time,turn)).fetchone()
+            if not valid_slot:
+                c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
+        else:
+            c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
         message = (
             "⚽ Hola, Coach Juan Carlos. Quiero solicitar un entrenamiento de fútbol.\n\n"
             f"Padre/madre: {parent_name}\nWhatsApp: {whatsapp}\nAlumno: {student_name}\nEdad: {age}\n"
             f"Zona: {zone}\nModalidad: {mode}\nParque o dirección: {place}\n"
-            f"Turno preferido: {turn}\nHorario de interés: {schedule or 'Por coordinar'}\nFotos/videos: {photo_consent or 'Por coordinar'}"
+            f"Turno preferido: {turn}\nHorario de interés: {schedule_day} · {display_time(schedule_time)}\nFotos/videos: {photo_consent or 'Por coordinar'}"
         )
         c.close()
         return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
@@ -511,7 +618,7 @@ def new_student():
             c.commit()
         except ValueError as exc:
             c.rollback(); c.close()
-            msg = "El paquete seleccionado no existe o ya no tiene clases disponibles." if str(exc)=="package_invalid" else "Revisa los datos y el monto del pago."
+            msg = ("El paquete seleccionado no existe o ya no tiene clases disponibles." if str(exc)=="package_invalid" else ("Agrega al menos una fecha y hora válidas." if str(exc)=="invalid_class" else ("Ese horario no está disponible para reprogramar." if str(exc) in ("occupied_class", "duplicate_class") else "Revisa los datos y el monto del pago.")))
             flash(msg); return redirect(url_for("new_student"))
         except Exception:
             c.rollback(); c.close()
@@ -532,12 +639,29 @@ def new_student():
 def save_class_groups(c, sid, tariff, form):
     indexes=sorted({k.rsplit("_",1)[1] for k in form.keys() if k.startswith("class_date_")}, key=lambda x:int(x))
     created=[]
+    submitted=set()
+    today=datetime.now(PERU_TZ).date()
+    student_place = c.execute("SELECT mode, place FROM students WHERE id=%s", (sid,)).fetchone()
+    mode=(student_place["mode"] if student_place else "Parque") or "Parque"
+    place=(student_place["place"] if student_place else "") or ""
     for idx in indexes:
         d=form.get(f"class_date_{idx}","").strip(); t=form.get(f"class_time_{idx}","").strip()
-        if not d or not t: continue
-        student_place = c.execute("SELECT mode, place FROM students WHERE id=%s", (sid,)).fetchone()
-        mode=(student_place["mode"] if student_place else "Parque") or "Parque"
-        place=(student_place["place"] if student_place else "") or ""
+        if not d and not t:
+            continue
+        try:
+            class_date=date.fromisoformat(d)
+            datetime.strptime(t, "%H:%M")
+        except (ValueError, TypeError):
+            raise ValueError("invalid_class")
+        if class_date < today or class_date.weekday() > 5:
+            raise ValueError("invalid_class")
+        key=(d,t)
+        if key in submitted:
+            raise ValueError("duplicate_class")
+        submitted.add(key)
+        existing=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",(d,t)).fetchone()
+        if existing:
+            raise ValueError("occupied_class")
         notes=form.get(f"class_notes_{idx}","").strip()
         row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes)
             VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,tariff,d,t,notes)).fetchone()
@@ -699,7 +823,11 @@ def delete_class(class_id):
 def new_class():
     c=db()
     if request.method=="POST":
-        sid=int(request.form["student_id"]); s=c.execute("SELECT * FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
+        try:
+            sid=int(request.form.get("student_id",""))
+        except (TypeError,ValueError):
+            c.close(); flash("Alumno no encontrado."); return redirect(url_for("new_class"))
+        s=c.execute("SELECT * FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
         if not s: c.close(); flash("Alumno no encontrado."); return redirect(url_for("new_class"))
         try:
             created=save_class_groups(c,sid,float(s["tariff"]),request.form)
@@ -708,7 +836,7 @@ def new_class():
             c.commit()
         except ValueError as exc:
             c.rollback(); c.close()
-            msg = "El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else ("No se pudo registrar el pago. Revisa el monto." if str(exc) in ("payment_amount", "package_invalid") else "Agrega al menos una fecha y hora válidas.")
+            msg = ("El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else ("No se pudo registrar el pago. Revisa el monto." if str(exc) in ("payment_amount", "package_invalid") else ("Agrega al menos una fecha y hora válidas." if str(exc)=="invalid_class" else ("Ese horario no está disponible para reprogramar." if str(exc) in ("occupied_class", "duplicate_class") else "Agrega al menos una fecha y hora válidas."))))
             flash(msg); return redirect(url_for("new_class",student=sid))
         except Exception:
             c.rollback(); c.close(); flash("No se pudieron registrar las clases. Revisa los datos antes de volver a intentarlo."); return redirect(url_for("new_class",student=sid))
@@ -726,9 +854,11 @@ def payments():
     c=db()
     sync_payment_status(c)
     if request.method=="POST":
-        sid=request.form["student_id"]; ptype=request.form.get("payment_type","regular"); amount=service_amount(request.form.get("amount"))
+        sid=request.form.get("student_id","").strip(); ptype=request.form.get("payment_type","regular"); amount=service_amount(request.form.get("amount"))
+        if not sid.isdigit():
+            c.close(); flash("Alumno no encontrado."); return redirect(url_for("payments"))
         payment_month=request.form.get("month") or request.form.get("package_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
-        tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s",(sid,)).fetchone()
+        tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
         tariff=float(tariff_row["tariff"] or 0) if tariff_row else 0
         if ptype=="package_8": amount=520.0; total=8
         else:
@@ -758,23 +888,23 @@ def availability():
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
+        try: datetime.strptime(time, "%H:%M")
+        except ValueError: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
+        if day not in DAYS or turn not in TURN_ORDER:
+            c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
+        duplicate=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s",(zone,day,time)).fetchone()
+        if duplicate:
+            c.close(); return redirect(url_for("availability"))
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
-    today=datetime.now(PERU_TZ).date(); horizon=today+timedelta(days=45); recovery=[]; seen=set()
+    today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
-        patterns=c.execute("SELECT DISTINCT date,time FROM classes WHERE student_id=%s AND status IN ('scheduled','rescheduled','postponed')",(st['id'],)).fetchall()
-        if not patterns: continue
-        last=max(date.fromisoformat(r['date']) for r in patterns)
-        for r in patterns:
-            d=date.fromisoformat(r['date'])+timedelta(days=7)
-            while d<=horizon:
-                key=(d.isoformat(),r['time'])
-                if d>today and d>last and key not in seen:
-                    occ=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",(d.isoformat(),r['time'])).fetchone()
-                    if not occ:
-                        seen.add(key); recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':d.isoformat(),'day':DAYS[d.weekday()],'time':r['time']})
-                d+=timedelta(days=7)
+        for x in automatic_recovery_slots(c, st['id'], today, 45):
+            key=(x['date'],x['time'])
+            if key in seen: continue
+            seen.add(key)
+            recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':x['date'],'day':x['day'],'time':x['time']})
     recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
     c.close()
     return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,recovery_slots=recovery)
@@ -857,18 +987,56 @@ def parent_home():
         attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s", (s["id"],current_month+'%')).fetchone()["n"]
         month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
         month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
+        month_payment_status = current_paid > 0 or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
         extra_count=max(0, scheduled_count-paid_count)
         # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
         reprogrammable_id=upcoming[0]["id"] if upcoming else None
         child_data.append({
             "student":s, "upcoming":upcoming, "history":history, "payments":payments_rows,
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
-            "month_paid_classes":month_paid_classes, "month_attended":attended_count,
+            "month_paid_classes":month_paid_classes, "month_attended":attended_count, "month_payment_status":month_payment_status,
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
             "extra_count":extra_count, "reprogrammable_id":reprogrammable_id,
         })
     c.close(); return render_template("parent.html", children=child_data)
 
+
+
+@app.route("/alumno/solicitar", methods=["GET","POST"])
+def parent_request_class():
+    if session.get("role") != "parent":
+        return redirect(url_for("parent_login"))
+    c=db(); user_id=session["user_id"]
+    children=c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' ORDER BY student_name",(user_id,)).fetchall()
+    if not children:
+        c.close(); flash("No hay alumnos asociados a esta cuenta."); return redirect(url_for("logout"))
+    selected_id=request.args.get("student_id",type=int)
+    if request.method=="POST":
+        selected_id=request.form.get("student_id",type=int)
+        child=c.execute("SELECT * FROM students WHERE id=%s AND user_id=%s AND status='active'",(selected_id,user_id)).fetchone()
+        if not child:
+            c.close(); flash("Alumno no válido."); return redirect(url_for("parent_request_class"))
+        slot_value=request.form.get("slot","").strip()
+        try: new_date,new_time=slot_value.split("|",1)
+        except ValueError:
+            c.close(); flash("Selecciona un horario."); return redirect(url_for("parent_request_class",student_id=selected_id))
+        slots=current_student_slots(c,child,datetime.now(PERU_TZ).date())
+        if not any(x["date"]==new_date and x["time"]==new_time for x in slots):
+            c.close(); flash("Ese horario ya no está disponible."); return redirect(url_for("parent_request_class",student_id=selected_id))
+        # The parent sends a request; Coach confirms/programs it. No class is created here.
+        message=(f"⚽ Hola, Coach Juan Carlos.\n\nQuisiera solicitar una nueva clase para mi hijo/a.\n\n"
+                 f"Alumno: {child['student_name']}\nZona: {child['zone'] or 'Por indicar'}\n"
+                 f"Fecha solicitada: {display_day(new_date).lower()} {display_date(new_date)}\n"
+                 f"Hora solicitada: {display_time(new_time)}\n\n"
+                 "La solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
+        c.close()
+        return render_template("rescheduled.html", current={"student_id":child["id"],"student_name":child["student_name"],"student_zone":child["zone"],"date":new_date,"time":new_time,"place":child["place"]}, old_date=None,new_date=new_date,new_time=new_time,zone=child["zone"], whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}", request_mode=True)
+    if not selected_id:
+        selected_id=children[0]["id"]
+    selected=next((x for x in children if x["id"]==selected_id),children[0])
+    slots=current_student_slots(c,selected,datetime.now(PERU_TZ).date())
+    c.close()
+    return render_template("parent_request.html",children=children,selected=selected,slots=slots)
 
 @app.route("/alumno/clase/<int:class_id>/reprogramar", methods=["GET","POST"])
 def reschedule(class_id):
@@ -876,6 +1044,11 @@ def reschedule(class_id):
     c=db(); current=c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone,students.parent_name
         FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s AND students.user_id=%s""",(class_id,session["user_id"])).fetchone()
     if not current: c.close(); flash("Clase no encontrada."); return redirect(url_for("parent_home"))
+    next_class=c.execute("""SELECT classes.id FROM classes JOIN students ON students.id=classes.student_id
+        WHERE students.user_id=%s AND classes.date>=%s AND classes.status IN ('scheduled','rescheduled','postponed')
+        ORDER BY classes.date,classes.time,classes.id LIMIT 1""",(session["user_id"],datetime.now(PERU_TZ).date().isoformat())).fetchone()
+    if not next_class or next_class["id"]!=class_id:
+        c.close(); flash("Esta clase no está disponible para reprogramación directa."); return redirect(url_for("parent_home"))
     if current["status"] not in ("scheduled","rescheduled","postponed"):
         c.close(); flash("Esta clase no está disponible para reprogramación directa."); return redirect(url_for("parent_home"))
     try: original_dt=parse_iso_datetime(current["date"],current["time"])
