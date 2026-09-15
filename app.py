@@ -901,6 +901,24 @@ def payments():
     return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info))
 
 
+@app.route("/entrenador/pago/<int:payment_id>/eliminar", methods=["POST"])
+@coach_required
+def delete_payment(payment_id):
+    c=db()
+    row=c.execute("SELECT * FROM payments WHERE id=%s", (payment_id,)).fetchone()
+    if not row:
+        c.close(); flash("Pago no encontrado."); return redirect(url_for("payments"))
+    # Release any classes covered by this payment before removing it. Then
+    # re-run the normal payment assignment so remaining valid payments keep
+    # covering the appropriate classes.
+    c.execute("UPDATE classes SET payment_id=NULL,payment_status='pending' WHERE payment_id=%s", (payment_id,))
+    c.execute("DELETE FROM payments WHERE id=%s", (payment_id,))
+    sync_payment_status(c, row["student_id"])
+    c.commit(); c.close()
+    flash("Pago eliminado correctamente.")
+    return redirect(url_for("payments"))
+
+
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
 @coach_required
 def availability():
