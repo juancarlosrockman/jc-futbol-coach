@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import os
+import uuid
 import re
 from urllib.parse import quote
 from datetime import date, datetime, timedelta
@@ -101,6 +102,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_date TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_time TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS session_group_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
@@ -655,18 +657,29 @@ def save_class_groups(c, sid, tariff, form):
             datetime.strptime(t, "%H:%M")
         except (ValueError, TypeError):
             raise ValueError("invalid_class")
-        if class_date < today or class_date.weekday() > 5:
+        # Coach Juan Carlos can register past classes because the panel is also
+        # used to record classes already taken and payments already received.
+        if class_date.weekday() > 5:
             raise ValueError("invalid_class")
         key=(d,t)
         if key in submitted:
             raise ValueError("duplicate_class")
         submitted.add(key)
-        existing=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') LIMIT 1",(d,t)).fetchone()
-        if existing:
-            raise ValueError("occupied_class")
+        # A time slot may contain more than one student when they train together
+        # (siblings, cousins, or another small group). Each student keeps their
+        # own classes and payments. Classes sharing date/time/mode/place are
+        # linked to the same session_group_id.
+        existing=c.execute("SELECT id,session_group_id FROM classes WHERE date=%s AND time=%s AND mode=%s AND place=%s AND status IN ('scheduled','rescheduled','postponed','attended') ORDER BY id LIMIT 1",(d,t,mode,place)).fetchone()
+        if existing and existing["session_group_id"]:
+            session_group_id=existing["session_group_id"]
+        elif existing:
+            session_group_id=str(uuid.uuid4())
+            c.execute("UPDATE classes SET session_group_id=%s WHERE date=%s AND time=%s AND mode=%s AND place=%s AND status IN ('scheduled','rescheduled','postponed','attended')",(session_group_id,d,t,mode,place))
+        else:
+            session_group_id=str(uuid.uuid4())
         notes=form.get(f"class_notes_{idx}","").strip()
-        row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes)
-            VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,tariff,d,t,notes)).fetchone()
+        row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
+            VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,tariff,d,t,notes,session_group_id)).fetchone()
         created.append(row["id"])
     return created
 
@@ -983,12 +996,15 @@ def parent_home():
         current_month=today.strftime("%Y-%m")
         current_payments=[p for p in payments_rows if p["month"]==current_month and p["status"]=='paid']
         current_paid=sum(float(p["amount"] or 0) for p in current_payments)
-        scheduled_count=sum(1 for x in upcoming if x["status"]!='cancelled')
-        paid_count=sum(1 for x in upcoming if x["payment_status"]=='paid')
-        pending_count=max(0, scheduled_count-paid_count)
         attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s", (s["id"],current_month+'%')).fetchone()["n"]
         month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
         month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
+        # The monthly summary includes classes already taken as well as upcoming
+        # classes. The parent should see the full number scheduled for the month,
+        # not only the remaining future classes.
+        scheduled_count=month_scheduled
+        paid_count=month_paid_classes
+        pending_count=max(0, month_scheduled-month_paid_classes)
         month_payment_status = current_paid > 0 or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
         extra_count=max(0, scheduled_count-paid_count)
         # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
