@@ -820,9 +820,15 @@ def update_class_status(class_id):
     if status not in allowed: flash("Estado no válido."); return redirect(request.referrer or url_for("dashboard"))
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
-    c.execute("UPDATE classes SET status=%s WHERE id=%s",(status,class_id))
-    if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
-    c.commit(); c.close(); flash("Estado actualizado."); return redirect(request.referrer or url_for("dashboard"))
+    if status=="cancelled":
+        # A cancelled class should not keep consuming a payment. This lets the
+        # payment cover the correct class if the Coach is fixing a scheduling error.
+        c.execute("UPDATE classes SET status=%s,payment_id=NULL,payment_status='pending' WHERE id=%s",(status,class_id))
+    else:
+        c.execute("UPDATE classes SET status=%s WHERE id=%s",(status,class_id))
+        if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
+        sync_payment_status(c, row["student_id"])
+    c.commit(); c.close(); flash("Clase anulada." if status=="cancelled" else "Estado actualizado."); return redirect(request.referrer or url_for("dashboard"))
 
 
 @app.route("/entrenador/clase/<int:class_id>/eliminar", methods=["POST"])
