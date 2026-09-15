@@ -430,13 +430,15 @@ def nuevo():
             valid_slot=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s AND turn=%s LIMIT 1",(zone,schedule_day,schedule_time,turn)).fetchone()
             if not valid_slot:
                 c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
+        elif turn == "Mañana":
+            schedule_day, schedule_time = "Lunes a viernes", "Consultar disponibilidad"
         else:
             c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
         message = (
             "⚽ Hola, Coach Juan Carlos. Quiero solicitar un entrenamiento de fútbol.\n\n"
             f"Padre/madre: {parent_name}\nWhatsApp: {whatsapp}\nAlumno: {student_name}\nEdad: {age}\n"
             f"Zona: {zone}\nModalidad: {mode}\nParque o dirección: {place}\n"
-            f"Turno preferido: {turn}\nHorario de interés: {schedule_day} · {display_time(schedule_time)}\nFotos/videos: {photo_consent or 'Por coordinar'}"
+            f"Turno preferido: {turn}\nHorario de interés: {schedule_day} · {display_time(schedule_time) if schedule_time != "Consultar disponibilidad" else schedule_time}\nFotos/videos: {photo_consent or 'Por coordinar'}"
         )
         c.close()
         return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
