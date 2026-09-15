@@ -1,21 +1,68 @@
 {% extends "layout.html" %}
 {% block content %}
 <a class="back" href="{{url_for('home')}}">← Volver</a>
-<div class="card">
-<div class="wizard-steps"><div class="step active" data-step="1"><span class="n">1</span>Tarifas</div><div class="step" data-step="2"><span class="n">2</span>Zona</div><div class="step" data-step="3"><span class="n">3</span>Lugar</div><div class="step" data-step="4"><span class="n">4</span>Horario</div><div class="step" data-step="5"><span class="n">5</span>Datos</div></div>
-<form method="post" id="requestForm">
-<section class="wizard-panel active" data-panel="1"><h2>1. Tarifas de entrenamiento personalizado</h2><p class="muted">Elige la opción según la edad del alumno.</p><div class="price-grid">{% for p in pricing.new_students %}<div class="price-card"><div class="person">{% if loop.index==1 %}👶{% elif loop.index==2 %}🧒{% else %}👦{% endif %}</div><b>{{p.age}}</b><div class="small muted">{{p.duration}}</div><strong>{{p.price}}</strong></div>{% endfor %}</div><div class="notice" style="margin-top:12px">👥 ¿Entrenarán 2 o 3 alumnos juntos? <b>Consulta por la tarifa especial</b> para 2 o 3 alumnos.</div><div class="wizard-actions"><button type="button" class="btn green next">Siguiente →</button></div></section>
-<section class="wizard-panel" data-panel="2"><h2>2. Elige tu zona y turno</h2><p class="muted">Primero selecciona el turno. Luego aparecerán las zonas disponibles.</p><label>Turno</label><select id="turn" name="turn" required><option value="">Selecciona un turno</option><option value="Mañana">Mañanas, lunes a viernes — Consultar disponibilidad</option><option value="Tarde / noche">Tarde / noche</option></select><label>Zona</label><select id="requestZone" name="zone" required disabled><option value="">Primero selecciona un turno</option></select><div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button type="button" class="btn green next">Siguiente →</button></div></section>
-<section class="wizard-panel" data-panel="3"><h2>3. Lugar del entrenamiento</h2><p class="muted">Indica si será en parque o domicilio y el lugar concreto.</p><label>Modalidad</label><select name="mode"><option>Parque</option><option>Domicilio</option></select><label>Parque o dirección</label><input name="place" placeholder="Ej. Parque de la Familia" required><div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button type="button" class="btn green next">Siguiente →</button></div></section>
-<section class="wizard-panel" data-panel="4"><h2>4. Horario</h2><p class="muted">Selecciona uno de los horarios publicados para tu zona.</p><div id="availableList"><p class="muted">Selecciona primero turno y zona.</p></div><input type="hidden" name="schedule" id="schedule"><div id="waitBox" style="display:none" class="notice">¿No encuentras un horario? <a id="waitLink" href="{{url_for('espera')}}">Únete a la lista de espera.</a></div><div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button type="button" class="btn green next">Siguiente →</button></div></section>
-<section class="wizard-panel" data-panel="5"><h2>5. Tus datos</h2><p class="muted">Con estos datos podremos contactarte para coordinar tu entrenamiento.</p><label>Padre/madre o apoderado</label><input name="parent_name" required><label>Tu WhatsApp</label><input name="whatsapp" inputmode="tel" required><label>Alumno</label><input name="student_name" required><label>Edad</label><input name="age" type="number" min="3" required><label>Fotos y videos</label><select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option><option>Por coordinar</option></select><div class="notice">Coach Juan Carlos recibirá tu solicitud y se pondrá en contacto contigo para confirmar el horario.</div><div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button class="btn green" type="submit">📲 Enviar solicitud</button></div></section>
-</form></div>
+<div class="card public-request-card">
+  <div class="request-head">
+    <span class="eyebrow">NUEVO ALUMNO</span>
+    <h1>Solicita tu entrenamiento</h1>
+    <p class="muted">Completa estos 3 pasos.</p>
+  </div>
+  <div class="wizard-steps wizard-steps-3">
+    <div class="step active" data-step="1"><span class="n">1</span>Entrenamiento</div>
+    <div class="step" data-step="2"><span class="n">2</span>Disponibilidad</div>
+    <div class="step" data-step="3"><span class="n">3</span>Datos</div>
+  </div>
+  <form method="post" id="requestForm">
+    <section class="wizard-panel active" data-panel="1">
+      <h2>1. Entrenamiento</h2>
+      <p class="muted">Elige la opción según la edad del alumno.</p>
+      <div class="price-grid">{% for p in pricing.new_students %}<div class="price-card"><div class="person">{% if loop.index==1 %}👶{% elif loop.index==2 %}🧒{% else %}👦{% endif %}</div><b>{{p.age}}</b><div class="small muted">{{p.duration}}</div><strong>{{p.price}}</strong></div>{% endfor %}</div>
+      <label>Edad del alumno</label>
+      <input name="age" type="number" min="3" max="99" inputmode="numeric" placeholder="Edad" required>
+      <div class="notice" style="margin-top:4px">👥 ¿Entrenarán 2 o 3 alumnos juntos? <b>Consulta por la tarifa especial</b> para 2 o 3 alumnos.</div>
+      <div class="wizard-actions"><button type="button" class="btn green next">Siguiente →</button></div>
+    </section>
+
+    <section class="wizard-panel" data-panel="2">
+      <h2>2. Disponibilidad</h2>
+      <p class="muted">Primero selecciona el turno. Luego aparecerán las zonas disponibles.</p>
+      <label>Turno</label>
+      <select id="turn" name="turn" required><option value="">Selecciona un turno</option><option value="Mañana">Mañanas, lunes a viernes — Consultar disponibilidad</option><option value="Tarde / noche">Tarde / noche</option></select>
+      <label>Zona</label>
+      <select id="requestZone" name="zone" required disabled><option value="">Primero selecciona un turno</option></select>
+      <label>Modalidad</label>
+      <select name="mode" id="requestMode"><option>Parque</option><option>Domicilio</option></select>
+      <label>Parque o dirección</label>
+      <input name="place" id="requestPlace" placeholder="Ej. Parque de la Familia" required>
+      <label>Horario</label>
+      <div id="availableList"><p class="muted">Selecciona primero turno y zona.</p></div>
+      <input type="hidden" name="schedule" id="schedule">
+      <div id="waitBox" style="display:none" class="notice">¿No encuentras un horario? <a id="waitLink" href="{{url_for('espera')}}">Únete a la lista de espera.</a></div>
+      <div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button type="button" class="btn green next">Siguiente →</button></div>
+    </section>
+
+    <section class="wizard-panel" data-panel="3">
+      <h2>3. Tus datos</h2>
+      <p class="muted">Con estos datos podremos contactarte para coordinar tu entrenamiento.</p>
+      <label>Padre/madre o apoderado</label>
+      <input name="parent_name" required>
+      <label>Tu WhatsApp</label>
+      <input name="whatsapp" inputmode="tel" required>
+      <label>Alumno</label>
+      <input name="student_name" required>
+      <label>Fotos y videos</label>
+      <select name="photo_consent"><option>Sí, autorizo</option><option>No, no autorizo</option><option>Por coordinar</option></select>
+      <div class="notice">Coach Juan Carlos recibirá tu solicitud y se pondrá en contacto contigo para confirmar el horario.</div>
+      <div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button class="btn green" type="submit">📲 Enviar solicitud</button></div>
+    </section>
+  </form>
+</div>
 <script>
 const publicAvailability={{availability|tojson}};const turn=document.getElementById('turn'),rz=document.getElementById('requestZone'),list=document.getElementById('availableList'),schedule=document.getElementById('schedule');let current=1;
 function turnFor(a){return a.turn||((parseInt((a.raw_time||a.time).split(':')[0])<12)?'Mañana':'Tarde / noche')}
 function refreshZones(){const t=turn.value;const zones=t==='Mañana'?[...new Set(publicAvailability.map(a=>a.zone))]:[...new Set(publicAvailability.filter(a=>turnFor(a)===t).map(a=>a.zone))];rz.innerHTML='<option value="">'+(t?'Selecciona tu zona':'Primero selecciona un turno')+'</option>';zones.forEach(z=>{const o=document.createElement('option');o.value=z;o.textContent=z;rz.appendChild(o)});rz.disabled=!t;renderSlots()}
-function renderSlots(){const z=rz.value,t=turn.value;if(!z||!t){list.innerHTML='<p class="muted">Selecciona turno y zona para ver los horarios disponibles.</p>';return}if(t==='Mañana'){list.innerHTML='<div class="notice"><b>Mañanas, lunes a viernes</b><br>Consultar disponibilidad</div>';document.getElementById('waitBox').style.display='none';schedule.value='';return}const rows=publicAvailability.filter(a=>a.zone===z&&turnFor(a)===t);list.innerHTML=rows.length?rows.map(a=>`<div class="slot" data-value="${a.day}|${a.raw_time}"><span>📅 <b>${a.day}</b><br><small>${a.time}</small></span><span>›</span></div>`).join(''):'<p class="muted">No hay horarios publicados para esta zona y turno.</p>';document.getElementById('waitBox').style.display=rows.length?'none':'block';schedule.value='';document.querySelectorAll('.slot').forEach(s=>s.onclick=()=>{document.querySelectorAll('.slot').forEach(x=>x.classList.remove('selected'));s.classList.add('selected');schedule.value=s.dataset.value})}
+function renderSlots(){const z=rz.value,t=turn.value;if(!z||!t){list.innerHTML='<p class="muted">Selecciona turno y zona para ver los horarios disponibles.</p>';document.getElementById('waitBox').style.display='none';schedule.value='';return}if(t==='Mañana'){list.innerHTML='<div class="notice"><b>Mañanas, lunes a viernes</b><br>Consultar disponibilidad</div>';document.getElementById('waitBox').style.display='none';schedule.value='';return}const rows=publicAvailability.filter(a=>a.zone===z&&turnFor(a)===t);list.innerHTML=rows.length?rows.map(a=>`<div class="slot" data-value="${a.day}|${a.raw_time}"><span>📅 <b>${a.day}</b><br><small>${a.time}</small></span><span>›</span></div>`).join(''):'<p class="muted">No hay horarios publicados para esta zona y turno.</p>';document.getElementById('waitBox').style.display=rows.length?'none':'block';schedule.value='';document.querySelectorAll('#availableList .slot').forEach(s=>s.onclick=()=>{document.querySelectorAll('#availableList .slot').forEach(x=>x.classList.remove('selected'));s.classList.add('selected');schedule.value=s.dataset.value})}
 function show(n){current=n;document.querySelectorAll('.wizard-panel').forEach(p=>p.classList.toggle('active',+p.dataset.panel===n));document.querySelectorAll('.step').forEach(s=>s.classList.toggle('active',+s.dataset.step<=n));window.scrollTo({top:0,behavior:'smooth'})}
-document.querySelectorAll('.next').forEach(b=>b.onclick=()=>{const p=document.querySelector(`[data-panel="${current}"]`);const req=[...p.querySelectorAll('[required]')];if(req.some(x=>!x.checkValidity())){req.find(x=>!x.checkValidity())?.reportValidity();return}if(current<5)show(current+1)});document.querySelectorAll('.prev').forEach(b=>b.onclick=()=>show(current-1));turn.addEventListener('change',refreshZones);rz.addEventListener('change',renderSlots);refreshZones();
+document.querySelectorAll('.next').forEach(b=>b.onclick=()=>{const p=document.querySelector(`[data-panel="${current}"]`);const req=[...p.querySelectorAll('[required]')];if(req.some(x=>!x.checkValidity())){req.find(x=>!x.checkValidity())?.reportValidity();return}if(current===2&&turn.value!=='Mañana'&&!schedule.value){alert('Selecciona un horario.');return}if(current<3)show(current+1)});document.querySelectorAll('.prev').forEach(b=>b.onclick=()=>show(current-1));turn.addEventListener('change',refreshZones);rz.addEventListener('change',renderSlots);refreshZones();
 </script>
 {% endblock %}
