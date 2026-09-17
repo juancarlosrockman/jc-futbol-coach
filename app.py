@@ -23,7 +23,7 @@ MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","
 PRICING = {
     "new_students": [
         {"age": "3 años", "duration": "30 min", "price": "S/ 50"},
-        {"age": "4–5 años", "duration": "45 min", "price": "S/ 60"},
+        {"age": "4–5 años", "duration": "45 min", "price": "S/ 65"},
         {"age": "Desde 6 años hasta adultos", "duration": "1 hora", "price": "S/ 80"},
     ],
     "package": {"sessions": 8, "price": 600},
@@ -97,6 +97,10 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS availability(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, zone TEXT NOT NULL,
         day TEXT NOT NULL, time TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS availability_status(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, month TEXT NOT NULL,
+        turn TEXT NOT NULL, full BOOLEAN NOT NULL DEFAULT FALSE,
+        UNIQUE(month, turn))""")
     # Migrations for versions already deployed.
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_id INTEGER")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'")
@@ -456,8 +460,11 @@ def nuevo():
         if a["zone"] not in seen:
             zones.append(a["zone"]); seen.add(a["zone"])
         public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
+    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
+    status_rows=c.execute("SELECT turn,full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    agenda_status={r["turn"]:bool(r["full"]) for r in status_rows}
     c.close()
-    return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER)
+    return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER, agenda_status=agenda_status)
 
 
 @app.route("/espera", methods=["GET", "POST"])
@@ -905,7 +912,19 @@ def payments():
 @coach_required
 def availability():
     c=db()
+    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
     if request.method=="POST":
+        action=request.form.get("action", "add")
+        if action == "set_full":
+            turn=request.form.get("turn", "").strip()
+            if turn in TURN_ORDER:
+                c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET full=TRUE",(current_month,turn))
+                c.commit(); c.close(); flash(f"Agenda marcada como llena para {turn.lower()}."); return redirect(url_for("availability"))
+        if action == "open":
+            turn=request.form.get("turn", "").strip()
+            if turn in TURN_ORDER:
+                c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET full=FALSE",(current_month,turn))
+                c.commit(); c.close(); flash(f"Agenda disponible nuevamente para {turn.lower()}."); return redirect(url_for("availability"))
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
@@ -916,9 +935,14 @@ def availability():
         duplicate=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s",(zone,day,time)).fetchone()
         if duplicate:
             c.close(); return redirect(url_for("availability"))
-        c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
+        c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn))
+        # A newly published recurring slot means this turn is no longer fully closed.
+        c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET full=FALSE",(current_month,turn))
+        c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
+    status_rows=c.execute("SELECT turn,full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status={r["turn"]:bool(r["full"]) for r in status_rows}
     today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
         for x in automatic_recovery_slots(c, st['id'], today, 45):
@@ -928,7 +952,7 @@ def availability():
             recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':x['date'],'day':x['day'],'time':x['time']})
     recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
     c.close()
-    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,recovery_slots=recovery)
+    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,agenda_status=status,current_month=current_month,recovery_slots=recovery)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
