@@ -23,10 +23,10 @@ MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","
 PRICING = {
     "new_students": [
         {"age": "3 años", "duration": "30 min", "price": "S/ 50"},
-        {"age": "4–5 años", "duration": "45 min", "price": "S/ 60"},
-        {"age": "Desde 6 años hasta adultos", "duration": "1 hora", "price": "S/ 70"},
+        {"age": "4–5 años", "duration": "45 min", "price": "S/ 65"},
+        {"age": "Desde 6 años hasta adultos", "duration": "1 hora", "price": "S/ 80"},
     ],
-    "package": {"sessions": 8, "price": 520},
+    "package": {"sessions": 8, "price": 600},
 }
 SERVICES = [
     "Entrenamiento de equipo",
@@ -702,7 +702,7 @@ def save_optional_payment(c, sid, form, created_ids):
             c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)", (pid, ids))
         return pid
     if ptype == "package_8":
-        amount, total = 520.0, 8
+        amount, total = 600.0, 8
     else:
         amount = service_amount(form.get("payment_amount"))
         if amount <= 0:
@@ -881,7 +881,7 @@ def payments():
         payment_month=request.form.get("month") or request.form.get("package_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
         tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
         tariff=float(tariff_row["tariff"] or 0) if tariff_row else 0
-        if ptype=="package_8": amount=520.0; total=8
+        if ptype=="package_8": amount=600.0; total=8
         else:
             if amount<=0 or tariff<=0: c.close(); flash("El monto debe cubrir al menos una clase según la tarifa del alumno."); return redirect(url_for("payments"))
             total=int(amount//tariff)
@@ -899,24 +899,6 @@ def payments():
             package_info.append((p["id"],used,max(0,(p["sessions_total"] or 8)-used)))
     paid=sum(r["amount"] for r in rows if r["status"]=="paid"); c.close()
     return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info))
-
-
-@app.route("/entrenador/pago/<int:payment_id>/eliminar", methods=["POST"])
-@coach_required
-def delete_payment(payment_id):
-    c=db()
-    row=c.execute("SELECT * FROM payments WHERE id=%s", (payment_id,)).fetchone()
-    if not row:
-        c.close(); flash("Pago no encontrado."); return redirect(url_for("payments"))
-    # Release any classes covered by this payment before removing it. Then
-    # re-run the normal payment assignment so remaining valid payments keep
-    # covering the appropriate classes.
-    c.execute("UPDATE classes SET payment_id=NULL,payment_status='pending' WHERE payment_id=%s", (payment_id,))
-    c.execute("DELETE FROM payments WHERE id=%s", (payment_id,))
-    sync_payment_status(c, row["student_id"])
-    c.commit(); c.close()
-    flash("Pago eliminado correctamente.")
-    return redirect(url_for("payments"))
 
 
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
