@@ -22,9 +22,9 @@ MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","
 
 PRICING = {
     "new_students": [
-        {"age": "3 años", "duration": "Clase personalizada de 30 minutos", "price": "S/ 50"},
-        {"age": "4–5 años", "duration": "Clase personalizada de 45 minutos", "price": "S/ 65"},
-        {"age": "Desde 6 años hasta adultos", "duration": "Entrenamiento personalizado de 1 hora", "price": "S/ 80"},
+        {"age": "3 años", "duration": "30 min", "price": "S/ 50"},
+        {"age": "4–5 años", "duration": "45 min", "price": "S/ 60"},
+        {"age": "Desde 6 años hasta adultos", "duration": "1 hora", "price": "S/ 80"},
     ],
     "package": {"sessions": 8, "price": 600},
 }
@@ -97,8 +97,6 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS availability(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, zone TEXT NOT NULL,
         day TEXT NOT NULL, time TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS app_settings(
-        key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
     # Migrations for versions already deployed.
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_id INTEGER")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'")
@@ -446,9 +444,6 @@ def nuevo():
         )
         c.close()
         return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
-    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
-    full_row=c.execute("SELECT value FROM app_settings WHERE key='public_agenda_full_month'").fetchone()
-    agenda_full=bool(full_row and full_row["value"]==current_month)
     availability_rows = c.execute(
         """SELECT * FROM availability WHERE active=TRUE ORDER BY zone, CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4
@@ -462,9 +457,7 @@ def nuevo():
             zones.append(a["zone"]); seen.add(a["zone"])
         public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
     c.close()
-    if agenda_full:
-        public_availability=[]; zones=[]
-    return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER, agenda_full=agenda_full)
+    return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER)
 
 
 @app.route("/espera", methods=["GET", "POST"])
@@ -912,18 +905,7 @@ def payments():
 @coach_required
 def availability():
     c=db()
-    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
     if request.method=="POST":
-        action=request.form.get("action","")
-        if action=="toggle_full_month":
-            full=request.form.get("agenda_full") == "1"
-            if full:
-                c.execute("INSERT INTO app_settings(key,value) VALUES('public_agenda_full_month',%s) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", (current_month,))
-                flash("Agenda marcada como llena para el presente mes.")
-            else:
-                c.execute("DELETE FROM app_settings WHERE key='public_agenda_full_month'")
-                flash("Agenda disponible nuevamente para el presente mes.")
-            c.commit(); c.close(); return redirect(url_for("availability"))
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
@@ -937,8 +919,6 @@ def availability():
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn)); c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
-    full_row=c.execute("SELECT value FROM app_settings WHERE key='public_agenda_full_month'").fetchone()
-    agenda_full=bool(full_row and full_row["value"]==current_month)
     today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
         for x in automatic_recovery_slots(c, st['id'], today, 45):
@@ -948,7 +928,7 @@ def availability():
             recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':x['date'],'day':x['day'],'time':x['time']})
     recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
     c.close()
-    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,recovery_slots=recovery,agenda_full=agenda_full,current_month=current_month)
+    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,recovery_slots=recovery)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
