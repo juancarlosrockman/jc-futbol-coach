@@ -99,7 +99,7 @@ def init_db():
         day TEXT NOT NULL, time TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE)""")
     c.execute("""CREATE TABLE IF NOT EXISTS availability_status(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, month TEXT NOT NULL,
-        turn TEXT NOT NULL, full BOOLEAN NOT NULL DEFAULT FALSE,
+        turn TEXT NOT NULL, "full" BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
     # Migrations for versions already deployed.
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_id INTEGER")
@@ -461,7 +461,7 @@ def nuevo():
             zones.append(a["zone"]); seen.add(a["zone"])
         public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
     current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
-    status_rows=c.execute("SELECT turn,full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status_rows=c.execute('SELECT turn,"full" FROM availability_status WHERE month=%s',(current_month,)).fetchall()
     agenda_status={r["turn"]:bool(r["full"]) for r in status_rows}
     c.close()
     return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER, agenda_status=agenda_status)
@@ -918,12 +918,12 @@ def availability():
         if action == "set_full":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET full=TRUE",(current_month,turn))
+                c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET "full"=TRUE',(current_month,turn))
                 c.commit(); c.close(); flash(f"Agenda marcada como llena para {turn.lower()}."); return redirect(url_for("availability"))
         if action == "open":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET full=FALSE",(current_month,turn))
+                c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET "full"=FALSE',(current_month,turn))
                 c.commit(); c.close(); flash(f"Agenda disponible nuevamente para {turn.lower()}."); return redirect(url_for("availability"))
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
@@ -937,11 +937,11 @@ def availability():
             c.close(); return redirect(url_for("availability"))
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn))
         # A newly published recurring slot means this turn is no longer fully closed.
-        c.execute("INSERT INTO availability_status(month,turn,full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET full=FALSE",(current_month,turn))
+        c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET "full"=FALSE',(current_month,turn))
         c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
-    status_rows=c.execute("SELECT turn,full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status_rows=c.execute('SELECT turn,"full" FROM availability_status WHERE month=%s',(current_month,)).fetchall()
     status={r["turn"]:bool(r["full"]) for r in status_rows}
     today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
