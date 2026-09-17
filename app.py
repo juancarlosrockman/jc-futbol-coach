@@ -433,6 +433,9 @@ def nuevo():
                 datetime.strptime(schedule_time, "%H:%M")
             except (ValueError, TypeError):
                 c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
+            status_row=c.execute('SELECT "full" FROM availability_status WHERE month=%s AND turn=%s',(datetime.now(PERU_TZ).strftime("%Y-%m"),turn)).fetchone()
+            if status_row and status_row["full"]:
+                c.close(); flash("Ese turno no tiene horarios disponibles actualmente para el presente mes."); return redirect(url_for("nuevo"))
             valid_slot=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s AND turn=%s LIMIT 1",(zone,schedule_day,schedule_time,turn)).fetchone()
             if not valid_slot:
                 c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
