@@ -99,8 +99,16 @@ def init_db():
         day TEXT NOT NULL, time TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE)""")
     c.execute("""CREATE TABLE IF NOT EXISTS availability_status(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, month TEXT NOT NULL,
-        turn TEXT NOT NULL, "full" BOOLEAN NOT NULL DEFAULT FALSE,
+        turn TEXT NOT NULL, is_full BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
+    c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
+    # Migrate the previous version's column named "full" when it exists.
+    c.execute("""DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='availability_status' AND column_name='full') THEN
+        EXECUTE 'UPDATE availability_status SET is_full = "full"';
+      END IF;
+    END $$;""")
     # Migrations for versions already deployed.
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_id INTEGER")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending'")
@@ -426,6 +434,10 @@ def nuevo():
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
         if turn not in TURN_ORDER:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
+        current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
+        closed=c.execute("SELECT is_full FROM availability_status WHERE month=%s AND turn=%s",(current_month,turn)).fetchone()
+        if closed and closed["full"]:
+            c.close(); flash("La agenda de ese turno está llena. Puedes unirte a la lista de espera."); return redirect(url_for("nuevo"))
         schedule_day, schedule_time = "", ""
         if schedule:
             try:
@@ -433,9 +445,6 @@ def nuevo():
                 datetime.strptime(schedule_time, "%H:%M")
             except (ValueError, TypeError):
                 c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
-            status_row=c.execute('SELECT "full" FROM availability_status WHERE month=%s AND turn=%s',(datetime.now(PERU_TZ).strftime("%Y-%m"),turn)).fetchone()
-            if status_row and status_row["full"]:
-                c.close(); flash("Ese turno no tiene horarios disponibles actualmente para el presente mes."); return redirect(url_for("nuevo"))
             valid_slot=c.execute("SELECT 1 FROM availability WHERE active=TRUE AND zone=%s AND day=%s AND time=%s AND turn=%s LIMIT 1",(zone,schedule_day,schedule_time,turn)).fetchone()
             if not valid_slot:
                 c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
@@ -464,8 +473,8 @@ def nuevo():
             zones.append(a["zone"]); seen.add(a["zone"])
         public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
     current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
-    status_rows=c.execute('SELECT turn,"full" FROM availability_status WHERE month=%s',(current_month,)).fetchall()
-    agenda_status={r["turn"]:bool(r["full"]) for r in status_rows}
+    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    agenda_status={r["turn"]:bool(r["is_full"]) for r in status_rows}
     c.close()
     return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER, agenda_status=agenda_status)
 
@@ -921,12 +930,12 @@ def availability():
         if action == "set_full":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET "full"=TRUE',(current_month,turn))
+                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET is_full=TRUE",(current_month,turn))
                 c.commit(); c.close(); flash(f"Agenda marcada como llena para {turn.lower()}."); return redirect(url_for("availability"))
         if action == "open":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET "full"=FALSE',(current_month,turn))
+                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(current_month,turn))
                 c.commit(); c.close(); flash(f"Agenda disponible nuevamente para {turn.lower()}."); return redirect(url_for("availability"))
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
@@ -940,12 +949,12 @@ def availability():
             c.close(); return redirect(url_for("availability"))
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn))
         # A newly published recurring slot means this turn is no longer fully closed.
-        c.execute('INSERT INTO availability_status(month,turn,"full") VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET "full"=FALSE',(current_month,turn))
+        c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(current_month,turn))
         c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
-    status_rows=c.execute('SELECT turn,"full" FROM availability_status WHERE month=%s',(current_month,)).fetchall()
-    status={r["turn"]:bool(r["full"]) for r in status_rows}
+    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status={r["turn"]:bool(r["is_full"]) for r in status_rows}
     today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
         for x in automatic_recovery_slots(c, st['id'], today, 45):
