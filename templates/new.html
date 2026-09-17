@@ -15,11 +15,10 @@
   <form method="post" id="requestForm">
     <section class="wizard-panel active" data-panel="1">
       <h2>1. Entrenamiento</h2>
-      <p class="muted">Elige la opción según la edad del alumno.</p>
-      <div class="price-grid">{% for p in pricing.new_students %}<div class="price-card"><div class="person">{% if loop.index==1 %}👶{% elif loop.index==2 %}🧒{% else %}👦{% endif %}</div><b>{{p.age}}</b><div class="small muted">{{p.duration}}</div><strong>{{p.price}}</strong></div>{% endfor %}</div>
+      <p class="muted">Primero indica la edad del alumno.</p>
       <label>Edad del alumno</label>
-      <input name="age" type="number" min="3" max="99" inputmode="numeric" placeholder="Edad" required>
-      <div class="notice" style="margin-top:4px">👥 ¿Entrenarán 2 o 3 alumnos juntos? <b>Consulta por la tarifa especial</b> para 2 o 3 alumnos.</div>
+      <input name="age" id="age" type="number" min="3" max="99" inputmode="numeric" placeholder="Edad" required>
+      <div id="priceResult" style="display:none;margin-top:12px"></div>
       <div class="wizard-actions"><button type="button" class="btn green next">Siguiente →</button></div>
     </section>
 
@@ -37,7 +36,7 @@
       <label>Horario</label>
       <div id="availableList"><p class="muted">Selecciona primero turno y zona.</p></div>
       <input type="hidden" name="schedule" id="schedule">
-      <div id="waitBox" style="display:none" class="notice">¿No encuentras un horario? <a id="waitLink" href="{{url_for('espera')}}">Únete a la lista de espera.</a></div>
+      <div id="waitBox" style="display:none" class="notice"><a id="waitLink" href="{{url_for('espera')}}"><b>📝 Unirme a la lista de espera</b></a></div>
       <div class="wizard-actions"><button type="button" class="btn light prev">← Atrás</button><button type="button" class="btn green next">Siguiente →</button></div>
     </section>
 
@@ -58,10 +57,12 @@
   </form>
 </div>
 <script>
-const publicAvailability={{availability|tojson}};const turn=document.getElementById('turn'),rz=document.getElementById('requestZone'),list=document.getElementById('availableList'),schedule=document.getElementById('schedule');let current=1;
+const publicAvailability={{availability|tojson}};const turn=document.getElementById('turn'),rz=document.getElementById('requestZone'),list=document.getElementById('availableList'),schedule=document.getElementById('schedule'),age=document.getElementById('age'),priceResult=document.getElementById('priceResult');let current=1;
+function renderPrice(){const a=parseInt(age.value,10);if(!a||a<3){priceResult.style.display='none';priceResult.innerHTML='';return}let html='';if(a===3){html='<div class="price-card"><div class="person">👶</div><b>3 años</b><div class="small muted">Clase personalizada de 30 minutos</div><strong>S/50</strong></div>';}else if(a>=4&&a<=5){html='<div class="price-card"><div class="person">🧒</div><b>4–5 años</b><div class="small muted">Clase personalizada de 45 minutos</div><strong>S/65</strong></div>';}else{html='<div class="price-grid"><div class="price-card"><div class="person">👦</div><b>Desde 6 años hasta adultos</b><div class="small muted">Entrenamiento personalizado de 1 hora</div><strong>S/80</strong></div><div class="price-card"><div class="person">👥</div><b>2 alumnos</b><div class="small muted">Entrenamiento para 2 alumnos</div><strong>S/140</strong></div><div class="price-card"><div class="person">👥</div><b>3 alumnos</b><div class="small muted">Entrenamiento para 3 alumnos</div><strong>S/180</strong></div><div class="price-card"><div class="person">📅</div><b>8 clases</b><div class="small muted">8 sesiones de entrenamiento</div><strong>S/600</strong></div></div>';}priceResult.innerHTML=html;priceResult.style.display='block';}
+age.addEventListener('input',renderPrice);
 function turnFor(a){return a.turn||((parseInt((a.raw_time||a.time).split(':')[0])<12)?'Mañana':'Tarde / noche')}
 function refreshZones(){const t=turn.value;const zones=t==='Mañana'?[...new Set(publicAvailability.map(a=>a.zone))]:[...new Set(publicAvailability.filter(a=>turnFor(a)===t).map(a=>a.zone))];rz.innerHTML='<option value="">'+(t?'Selecciona tu zona':'Primero selecciona un turno')+'</option>';zones.forEach(z=>{const o=document.createElement('option');o.value=z;o.textContent=z;rz.appendChild(o)});rz.disabled=!t;renderSlots()}
-function renderSlots(){const z=rz.value,t=turn.value;if(!z||!t){list.innerHTML='<p class="muted">Selecciona turno y zona para ver los horarios disponibles.</p>';document.getElementById('waitBox').style.display='none';schedule.value='';return}if(t==='Mañana'){list.innerHTML='<div class="notice"><b>Mañanas, lunes a viernes</b><br>Consultar disponibilidad</div>';document.getElementById('waitBox').style.display='none';schedule.value='';return}const rows=publicAvailability.filter(a=>a.zone===z&&turnFor(a)===t);list.innerHTML=rows.length?rows.map(a=>`<div class="slot" data-value="${a.day}|${a.raw_time}"><span>📅 <b>${a.day}</b><br><small>${a.time}</small></span><span>›</span></div>`).join(''):'<p class="muted">No hay horarios publicados para esta zona y turno.</p>';document.getElementById('waitBox').style.display=rows.length?'none':'block';schedule.value='';document.querySelectorAll('#availableList .slot').forEach(s=>s.onclick=()=>{document.querySelectorAll('#availableList .slot').forEach(x=>x.classList.remove('selected'));s.classList.add('selected');schedule.value=s.dataset.value})}
+function renderSlots(){const z=rz.value,t=turn.value;if(!z||!t){list.innerHTML='<p class="muted">Selecciona turno y zona para ver los horarios disponibles.</p>';document.getElementById('waitBox').style.display='none';schedule.value='';return}if(t==='Mañana'){list.innerHTML='<div class="notice"><b>Mañanas, lunes a viernes</b><br>Consultar disponibilidad</div>';document.getElementById('waitBox').style.display='none';schedule.value='';return}const rows=publicAvailability.filter(a=>a.zone===z&&turnFor(a)===t);if(rows.length){list.innerHTML=rows.map(a=>`<div class="slot" data-value="${a.day}|${a.raw_time}"><span>📅 <b>${a.day}</b><br><small>${a.time}</small></span><span>›</span></div>`).join('');document.getElementById('waitBox').style.display='none';}else{list.innerHTML='<div class="notice"><b>🔴 AGENDA LLENA</b><br>No hay horarios disponibles actualmente para el presente mes.</div>';document.getElementById('waitBox').style.display='block';}schedule.value='';document.querySelectorAll('#availableList .slot').forEach(s=>s.onclick=()=>{document.querySelectorAll('#availableList .slot').forEach(x=>x.classList.remove('selected'));s.classList.add('selected');schedule.value=s.dataset.value})}
 function show(n){current=n;document.querySelectorAll('.wizard-panel').forEach(p=>p.classList.toggle('active',+p.dataset.panel===n));document.querySelectorAll('.step').forEach(s=>s.classList.toggle('active',+s.dataset.step<=n));window.scrollTo({top:0,behavior:'smooth'})}
 document.querySelectorAll('.next').forEach(b=>b.onclick=()=>{const p=document.querySelector(`[data-panel="${current}"]`);const req=[...p.querySelectorAll('[required]')];if(req.some(x=>!x.checkValidity())){req.find(x=>!x.checkValidity())?.reportValidity();return}if(current===2&&turn.value!=='Mañana'&&!schedule.value){alert('Selecciona un horario.');return}if(current<3)show(current+1)});document.querySelectorAll('.prev').forEach(b=>b.onclick=()=>show(current-1));turn.addEventListener('change',refreshZones);rz.addEventListener('change',renderSlots);refreshZones();
 </script>
