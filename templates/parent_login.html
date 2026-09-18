@@ -1,8 +1,9 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="card" style="margin-top:35px;text-align:center">
-<img class="hero-logo" style="width:88px;height:88px;margin:5px auto 15px" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman Training">
-<h1 style="font-size:25px;margin:5px 0">Alumno actual</h1><p class="muted">Ingresa a tu cuenta para ver las clases de tus hijos.</p>
-<form method="post" style="text-align:left"><label>WhatsApp registrado</label><input name="whatsapp" inputmode="tel" placeholder="Ej. 993 757 225" required><label>Contraseña</label><input name="password" type="password" required><button class="btn green" style="width:100%">Ingresar</button></form>
+<div class="card login-card" style="margin-top:28px">
+<img class="hero-logo" style="width:78px;height:78px;margin:5px auto 14px" src="{{url_for('static',filename='logo.jpg')}}" alt="JC Rockman Training">
+<h1 style="font-size:25px;margin:5px 0;text-align:center">Alumno actual</h1><p class="muted" style="text-align:center">Ingresa a tu cuenta para ver las clases de tus hijos.</p>
+<form method="post"><label>WhatsApp registrado</label><input name="whatsapp" inputmode="tel" placeholder="Ej. 993 757 225" required><label>Contraseña</label><input name="password" type="password" required><a class="small" style="display:block;text-align:right;color:var(--g);font-weight:800" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito ayuda para ingresar a mi cuenta.')}}">¿Olvidaste tu contraseña?</a><button class="btn green" style="width:100%;margin-top:12px">Ingresar</button></form>
+<div class="notice" style="margin-top:14px;text-align:center">¿Aún no tienes cuenta?<br><a class="btn light" href="{{url_for('nuevo')}}" style="margin-top:8px">Solicitar entrenamiento</a></div>
 <a class="back" href="{{url_for('home')}}">← Volver al inicio</a></div>
 {% endblock %}

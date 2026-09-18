@@ -1,0 +1,5 @@
+{% extends "layout.html" %}{% block content %}
+<a class="back" href="{{url_for('dashboard')}}">← Inicio Coach</a>
+<div class="card"><h1>Galería</h1><p class="muted">Material compartido por alumno. Cada padre solo puede ver los archivos asociados a sus hijos.</p></div>
+{% for m in media %}<div class="card media-card"><div class="row"><b>{{m.student_name}}</b><span class="small muted">{{m.created_at.strftime('%d/%m/%Y') if m.created_at else ''}}</span></div><a class="btn light" href="{{url_for('coach_media',media_id=m.id)}}" target="_blank">Ver archivo</a>{% if m.caption %}<p class="small muted">{{m.caption}}</p>{% endif %}</div>{% else %}<div class="card"><p class="muted">Aún no hay archivos en la galería.</p></div>{% endfor %}
+{% endblock %}
