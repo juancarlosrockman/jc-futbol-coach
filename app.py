@@ -446,7 +446,7 @@ def nuevo():
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
         current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
         closed=c.execute("SELECT is_full FROM availability_status WHERE month=%s AND turn=%s",(current_month,turn)).fetchone()
-        if closed and closed["full"]:
+        if closed and closed["is_full"]:
             c.close(); flash("La agenda de ese turno está llena. Puedes unirte a la lista de espera."); return redirect(url_for("nuevo"))
         schedule_day, schedule_time = "", ""
         if schedule:
@@ -865,12 +865,15 @@ def edit_class(class_id):
             c.close(); flash("La fecha u hora no son válidas."); return redirect(url_for("edit_class", class_id=class_id))
         if selected.weekday() > 5:
             c.close(); flash("No se pueden agendar clases los domingos."); return redirect(url_for("edit_class", class_id=class_id))
-        duplicate = c.execute("""SELECT 1 FROM classes
-            WHERE student_id=%s AND date=%s AND time=%s AND id<>%s
+        conflict = c.execute("""SELECT id,student_id,mode,place,session_group_id FROM classes
+            WHERE date=%s AND time=%s AND id<>%s
             AND status IN ('scheduled','rescheduled','postponed') LIMIT 1""",
-            (current["student_id"], new_date, new_time, class_id)).fetchone()
-        if duplicate:
-            c.close(); flash("Ese alumno ya tiene una clase agendada en esa fecha y hora."); return redirect(url_for("edit_class", class_id=class_id))
+            (new_date, new_time, class_id)).fetchone()
+        if conflict:
+            same_group = bool(current.get("session_group_id") and conflict.get("session_group_id") == current.get("session_group_id"))
+            same_student = conflict["student_id"] == current["student_id"]
+            if not (same_group or same_student):
+                c.close(); flash("Ese horario ya está ocupado por otra actividad."); return redirect(url_for("edit_class", class_id=class_id))
         old_date, old_time = current["date"], current["time"]
         c.execute("UPDATE classes SET date=%s,time=%s WHERE id=%s", (new_date, new_time, class_id))
         c.commit(); c.close()
