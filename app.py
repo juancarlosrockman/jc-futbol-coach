@@ -102,6 +102,16 @@ def init_db():
         turn TEXT NOT NULL, is_full BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
     c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
+    c.execute("""CREATE TABLE IF NOT EXISTS coach_notifications(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        kind TEXT NOT NULL,
+        class_id INTEGER,
+        student_id INTEGER,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_coach_notifications_created ON coach_notifications(created_at DESC)")
     # Migrate the previous version's column named "full" when it exists.
     c.execute("""DO $$
     BEGIN
@@ -544,6 +554,10 @@ def dashboard():
     today_classes = c.execute("""SELECT classes.*,students.student_name FROM classes
         LEFT JOIN students ON students.id=classes.student_id WHERE classes.date=%s
         ORDER BY classes.time""", (today,)).fetchall()
+    notifications = c.execute("""SELECT n.*, s.student_name
+        FROM coach_notifications n
+        LEFT JOIN students s ON s.id=n.student_id
+        ORDER BY n.created_at DESC, n.id DESC LIMIT 10""").fetchall()
     wait_count = c.execute("SELECT COUNT(*) AS n FROM waitlist WHERE status='waiting'").fetchone()["n"]
     # A class is pending only when it has no paid package/payment coverage.
     # Legacy classes without a payment_id are matched against paid regular
@@ -582,7 +596,7 @@ def dashboard():
     teams = c.execute("SELECT * FROM teams WHERE date >= %s ORDER BY date,time LIMIT 10", (today,)).fetchall()
     c.close()
     return render_template("dashboard.html", students=students, classes=classes, today_classes=today_classes,
-                           wait_count=wait_count, pending_payments=pending_payments, teams=teams)
+                           wait_count=wait_count, pending_payments=pending_payments, teams=teams, notifications=notifications)
 
 
 @app.route("/entrenador/alumnos")
@@ -829,6 +843,44 @@ def student_detail(sid):
             attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
             packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
     c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages, summary=summary)
+
+
+@app.route("/entrenador/clase/<int:class_id>/editar", methods=["GET", "POST"])
+@coach_required
+def edit_class(class_id):
+    c = db()
+    current = c.execute("""SELECT classes.*, students.student_name, students.zone AS student_zone
+        FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s""", (class_id,)).fetchone()
+    if not current:
+        c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    if current["status"] in ("attended", "cancelled"):
+        c.close(); flash("Esta clase no se puede editar porque ya está cerrada."); return redirect(request.referrer or url_for("dashboard"))
+    if request.method == "POST":
+        new_date = request.form.get("date", "").strip()
+        new_time = request.form.get("time", "").strip()
+        try:
+            selected = date.fromisoformat(new_date)
+            datetime.strptime(new_time, "%H:%M")
+        except (ValueError, TypeError):
+            c.close(); flash("La fecha u hora no son válidas."); return redirect(url_for("edit_class", class_id=class_id))
+        if selected.weekday() > 5:
+            c.close(); flash("No se pueden agendar clases los domingos."); return redirect(url_for("edit_class", class_id=class_id))
+        duplicate = c.execute("""SELECT 1 FROM classes
+            WHERE student_id=%s AND date=%s AND time=%s AND id<>%s
+            AND status IN ('scheduled','rescheduled','postponed') LIMIT 1""",
+            (current["student_id"], new_date, new_time, class_id)).fetchone()
+        if duplicate:
+            c.close(); flash("Ese alumno ya tiene una clase agendada en esa fecha y hora."); return redirect(url_for("edit_class", class_id=class_id))
+        old_date, old_time = current["date"], current["time"]
+        c.execute("UPDATE classes SET date=%s,time=%s WHERE id=%s", (new_date, new_time, class_id))
+        c.commit(); c.close()
+        if old_date != new_date or old_time != new_time:
+            flash(f"Clase corregida: {current['student_name']} · {display_date(new_date)} · {display_time(new_time)}.")
+        else:
+            flash("Clase guardada sin cambios de horario.")
+        return redirect(request.form.get("return_to") or url_for("student_detail", sid=current["student_id"]))
+    c.close()
+    return render_template("edit_class.html", current=current, return_to=request.args.get("return_to", ""))
 
 
 @app.route("/entrenador/clase/<int:class_id>/estado", methods=["POST"])
@@ -1127,8 +1179,14 @@ def reschedule(class_id):
         occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
         if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
         old_date=current["date"]; old_time=current["time"]
-        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id)); c.commit(); c.close()
-        message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nReprograma clase del día {display_date(old_date)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
+        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+        c.execute("""INSERT INTO coach_notifications(kind,class_id,student_id,title,message)
+            VALUES(%s,%s,%s,%s,%s)""", (
+                "reschedule", class_id, current["student_id"], "Nueva reprogramación",
+                f"{current['student_name']} cambió su clase de {display_date(old_date)} · {display_time(old_time)} a {display_date(new_date)} · {display_time(new_time)} · {zone or 'Zona por indicar'}."
+            ))
+        c.commit(); c.close()
+        message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nClase anterior: {display_date(old_date)} · {display_time(old_time)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
         return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
     slots=reschedule_slots(c,current,today)
     c.close(); return render_template("reschedule.html",current=current,slots=slots)
