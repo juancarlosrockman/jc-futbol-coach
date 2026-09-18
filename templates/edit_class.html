@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block content %}
+<a class="back" href="{{url_for('student_detail',sid=current.student_id)}}">← Ficha del alumno</a>
+<div class="card">
+  <h1>Editar clase</h1>
+  <p class="muted">Corrige la fecha u hora de una clase ya agendada. Esta edición no cambia el pago ni la cantidad de clases.</p>
+  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Horario actual:</b> {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Zona:</b> {{current.student_zone or 'Por indicar'}}</div>
+  <form method="post" style="margin-top:14px">
+    <label>Nueva fecha</label>
+    <input type="date" name="date" value="{{current.date}}" required>
+    <label>Nueva hora</label>
+    <input type="time" name="time" value="{{current.time}}" required>
+    <input type="hidden" name="return_to" value="{{return_to}}">
+    <button class="btn green" style="width:100%">💾 Guardar corrección</button>
+  </form>
+</div>
+{% endblock %}

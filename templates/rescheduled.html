@@ -18,7 +18,7 @@
     <b>{{'Fecha solicitada' if request_mode else 'Nueva fecha'}}:</b> {{display_date(new_date)}}<br>
     <b>{{'Hora solicitada' if request_mode else 'Nueva hora'}}:</b> {{display_time(new_time)}}
   </div>
-  <a class="btn green" href="{{whatsapp_url}}">📲 Enviar a Coach Juan Carlos por WhatsApp</a>
+  <a class="btn green" href="{{whatsapp_url}}">📲 {{'Avisar a Coach Juan Carlos por WhatsApp' if not request_mode else 'Enviar solicitud a Coach Juan Carlos por WhatsApp'}}</a>
   <br><a class="back" href="{{url_for('parent_home')}}">Volver a mis clases</a>
 </div>
 {% endblock %}
