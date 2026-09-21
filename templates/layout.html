@@ -22,7 +22,7 @@ body{background:#f5f8f6;color:var(--ink)}
 .btn{border-radius:12px;min-height:42px}.green{background:var(--g)}
 /* Home: ordenado y estable en móviles */
 .home-page{background:#071e15}.home-page .wrap{padding:0}.home-page .public-hero{height:100dvh;min-height:100dvh;padding:0;justify-content:flex-end;background:#09251a;position:relative}
-.home-page .public-hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,28,18,.12) 0%,rgba(3,28,18,.22) 38%,rgba(3,20,13,.92) 100%),url('/static/jc_coach_photo.png') center 18%/cover no-repeat;filter:none}
+.home-page .public-hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,28,18,.12) 0%,rgba(3,28,18,.22) 38%,rgba(3,20,13,.92) 100%),url('/static/jc_coach_photo.png') center 10%/cover no-repeat;filter:none}
 .home-page .public-hero:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(2,17,11,.76) 72%,rgba(2,14,9,.97) 100%);pointer-events:none}
 .home-page .hero-content{width:min(100%,520px);padding:0 22px 22px;margin:auto auto 0;position:relative;z-index:2}
 .home-page .hero-logo{width:92px;height:92px;margin:0 auto 18px;border:2px solid #fff;background:#fff;box-shadow:0 5px 18px #0005}
@@ -41,6 +41,12 @@ body{background:#f5f8f6;color:var(--ink)}
 .agenda-full{background:#fff4f4;border:1px solid #f0caca;color:#8b2626;border-radius:14px;padding:14px}.agenda-full b{font-size:15px}.wait-action{display:block;margin-top:9px;background:#fff;border:1px solid #b8ddc6;color:var(--g);padding:11px;border-radius:11px;text-decoration:none;font-weight:900;text-align:center}
 /* Coach */
 .coach-hero{background:linear-gradient(135deg,#083b25,#0b7c41);color:#fff;border:0}.coach-hero .muted{color:#d6eee0}.coach-hero .btn.light{background:#fff;color:var(--g)}
+@media(min-width:700px){
+.home-page .public-hero:before{background-position:left 10%} 
+.home-page .hero-content{width:min(520px,46vw);margin-left:auto;margin-right:6%;padding:0 0 38px}
+.home-page .hero-logo{margin-left:0;margin-right:auto}
+.home-page .hero-kicker,.home-page .hero-sub,.home-page .hero-coach-name,.home-page .hero-credential{text-align:left}
+}
 @media(max-width:380px){.home-page .hero-kicker{font-size:26px}.home-page .hero-logo{width:78px;height:78px;margin-bottom:13px}.home-page .hero-content{padding:0 17px 14px}.home-page .feature{font-size:9px}}
 </style></head>
 <body class="{% if request.endpoint=='home' %}home-page{% endif %}">
