@@ -1,10 +1,1 @@
-{% extends "layout.html" %}{% block content %}
-<div class="card center" style="margin-top:28px">
-  <div style="width:72px;height:72px;border-radius:50%;background:#0a8b4b;color:#fff;display:grid;place-items:center;font-size:42px;margin:8px auto 16px">✓</div>
-  <h2>¡Solicitud enviada!</h2>
-  <p class="muted">Recibimos tus datos correctamente. Coach Juan Carlos se pondrá en contacto contigo para confirmar los detalles.</p>
-  {% if whatsapp_url %}<div class="notice" style="text-align:left;margin:16px 0">Para completar la comunicación, puedes enviar ahora la solicitud por WhatsApp a Coach Juan Carlos.</div>
-  <a class="btn green" style="width:100%" href="{{whatsapp_url}}">📲 Enviar solicitud por WhatsApp</a>{% else %}<div class="notice" style="text-align:left;margin:16px 0">Coach Juan Carlos recibió la solicitud y se pondrá en contacto contigo para coordinar.</div>{% endif %}
-  <a class="back" href="{{url_for('home')}}">Volver al inicio</a>
-</div>
-{% endblock %}
+{% extends "layout.html" %}{% block content %}<div class="card center"><h2>¡Solicitud recibida!</h2><p class="muted">Gracias. Coach Juan Carlos se pondrá en contacto contigo para coordinar.</p><a class="btn green" href="{{url_for('home')}}">Volver al inicio</a></div>{% endblock %}

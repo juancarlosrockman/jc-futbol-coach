@@ -3,22 +3,15 @@
 <a class="back" href="{{url_for('student_detail',sid=current.student_id)}}">← Ficha del alumno</a>
 <div class="card">
   <h1>Editar clase</h1>
-  <p class="muted">Corrige los datos de una clase ya agendada. Esta edición es distinta de <b>Reprogramar</b> y no crea ni elimina una clase.</p>
-  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Horario actual:</b> {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Modalidad:</b> {{current.mode or 'Por indicar'}}<br><b>Lugar:</b> {{current.place or 'Por indicar'}}{% if current.notes %}<br><b>Notas:</b> {{current.notes}}{% endif %}</div>
+  <p class="muted">Corrige la fecha u hora de una clase ya agendada. Esta edición no cambia el pago ni la cantidad de clases.</p>
+  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Horario actual:</b> {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Zona:</b> {{current.student_zone or 'Por indicar'}}</div>
   <form method="post" style="margin-top:14px">
     <label>Nueva fecha</label>
     <input type="date" name="date" value="{{current.date}}" required>
     <label>Nueva hora</label>
     <input type="time" name="time" value="{{current.time}}" required>
-    <label>Modalidad</label>
-    <select name="mode"><option value="Parque" {% if current.mode=='Parque' %}selected{% endif %}>Parque</option><option value="Domicilio" {% if current.mode=='Domicilio' %}selected{% endif %}>Domicilio</option></select>
-    <label>Lugar / dirección</label>
-    <input name="place" value="{{current.place or ''}}" required>
-    <label>Notas de la clase</label>
-    <textarea name="notes" placeholder="Observaciones internas opcionales">{{current.notes or ''}}</textarea>
     <input type="hidden" name="return_to" value="{{return_to}}">
     <button class="btn green" style="width:100%">💾 Guardar corrección</button>
   </form>
 </div>
-<div class="notice" style="margin-top:10px"><b>Importante:</b> para cambiar una clase a otro espacio de recuperación por una solicitud del alumno, usa <b>Reprogramar</b>. Esta pantalla es para corregir una clase existente.</div>
 {% endblock %}

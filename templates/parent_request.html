@@ -20,8 +20,11 @@
   </div>
 </div>
 <div class="card">
-  <h2>Horarios disponibles</h2>
-  <p class="small muted">Selecciona una fecha y hora. La solicitud será enviada a Coach Juan Carlos para confirmación.</p>
+  <h2>Solicitar nueva clase</h2>
+  <p class="small muted">Primero elige el turno. Luego verás los horarios publicados para este alumno.</p>
+  <label>Turno</label>
+  <select id="turnFilter"><option value="">Todos los turnos</option><option value="Mañana">☀️ Mañana</option><option value="Tarde / noche">🌤️ Tarde / noche</option></select>
+  <div id="agendaMessage"></div>
   {% if slots %}
   <form method="post">
     <input type="hidden" name="student_id" value="{{selected.id}}">
@@ -34,8 +37,14 @@
     <button class="btn green" type="submit">📲 Solicitar este horario</button>
   </form>
   {% else %}
-  <div class="notice">No hay horarios disponibles publicados para la zona de {{selected.zone or 'este alumno'}} en las próximas semanas.</div>
-  <a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Soy alumno actual y necesito coordinar un horario que no aparece disponible en la app.')}}">📲 Coordinar por WhatsApp</a>
+  <div class="agenda-full"><b>AGENDA LLENA</b><br>No hay horarios publicados disponibles para la zona de {{selected.zone or 'este alumno'}} en este momento.</div>
+  <a class="wait-action" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Soy alumno actual y necesito coordinar un horario que no aparece disponible en la app.')}}">📲 Coordinar por WhatsApp</a>
   {% endif %}
 </div>
+<script>
+const tf=document.getElementById('turnFilter');
+const slotLabels=[...document.querySelectorAll('form label.slot')];
+function filterSlots(){const v=tf.value;let visible=0;slotLabels.forEach(el=>{const txt=el.innerText;const ok=!v||txt.includes(v);el.style.display=ok?'flex':'none';if(ok)visible++});const m=document.getElementById('agendaMessage');m.innerHTML=(v&&!visible)?'<div class="agenda-full"><b>AGENDA LLENA</b><br>No hay horarios disponibles publicados para este turno.</div><a class="wait-action" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Soy alumno actual y necesito coordinar un horario que no aparece disponible en la app.')}}">📲 Coordinar por WhatsApp</a>':''}
+tf?.addEventListener('change',filterSlots);
+</script>
 {% endblock %}

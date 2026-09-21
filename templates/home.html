@@ -1,20 +1,15 @@
 {% extends "layout.html" %}
 {% block content %}
 <div class="public-hero">
-  <button class="icon-btn public-menu-btn" onclick="document.getElementById('publicMenu').classList.add('open')" aria-label="Abrir menú">☰</button>
-  <div class="hero-overlay"></div>
+  <button class="icon-btn" style="position:absolute;right:15px;top:15px;z-index:3;background:#ffffff18;border-color:#ffffff55;color:#fff" onclick="document.getElementById('publicMenu').classList.add('open')">☰</button>
   <div class="hero-content">
-    <img class="hero-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="JC Rockman Training">
-    <div class="hero-brand">JC FÚTBOL COACH</div>
-    <div class="hero-line"></div>
+    <img class="hero-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman Training">
     <h1 class="hero-kicker">ENTRENAMIENTO<br>PERSONALIZADO<br>DE <span>FÚTBOL</span></h1>
-    <p class="hero-sub">Técnica · Táctica · Coordinación · Valores</p>
-    <div class="hero-meta"><span>👥 Todas las edades</span><span>📍 En Lima</span><span>⌂ Parques o domicilio</span></div>
-    <div class="coach-sign">Coach Juan Carlos</div>
-    <div class="coach-credential">ESTUDIOS FPF</div>
-    <a class="hero-btn primary" href="{{url_for('nuevo')}}"><span>⚽ &nbsp; ¿Eres nuevo?<small>Solicita tu entrenamiento</small></span><span>›</span></a>
-    <a class="hero-btn secondary" href="{{url_for('parent_login')}}"><span>🔒 &nbsp; Alumno actual<small>Ingresa a tu cuenta</small></span><span>›</span></a>
+    <p class="hero-sub">Movimiento · Coordinación · Fundamentos</p>
+    <div class="feature-row"><div class="feature"><span class="ico">⚽</span>Todas<br>las edades</div><div class="feature"><span class="ico">📍</span>Parques o<br>domicilio</div><div class="feature"><span class="ico">✓</span>Entrenamiento<br>personalizado</div></div>
+    <a class="hero-btn primary" href="{{url_for('nuevo')}}"><span>♟ &nbsp; ¿Eres nuevo?<small style="display:block;font-weight:500;font-size:11px;margin-left:28px">Solicita tu entrenamiento</small></span><span>›</span></a>
+    <a class="hero-btn secondary" href="{{url_for('parent_login')}}"><span>▣ &nbsp; Alumno actual<small style="display:block;font-weight:500;font-size:11px;margin-left:28px;color:#69746e">Ingresa a tu cuenta</small></span><span>›</span></a>
   </div>
 </div>
-<div class="drawer" id="publicMenu" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('publicMenu').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a href="{{url_for('home')}}">⌂ &nbsp; Inicio</a><a href="{{url_for('nuevo')}}">⚽ &nbsp; Solicitar clase</a><a href="{{url_for('equipo')}}">★ &nbsp; Servicios</a><a href="{{url_for('espera')}}">◷ &nbsp; Lista de espera</a><div class="spacer"></div></div></div>
+<div class="drawer" id="publicMenu" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('publicMenu').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a href="{{url_for('home')}}">⌂ &nbsp; Inicio</a><a href="{{url_for('nuevo')}}">⚽ &nbsp; Solicitar clase</a><a href="{{url_for('equipo')}}">★ &nbsp; Servicios</a><a href="{{url_for('espera')}}">◷ &nbsp; Lista de espera</a><a href="{{url_for('coach_login')}}">⚙ &nbsp; Acceso Coach</a><div class="spacer"></div></div></div>
 {% endblock %}
