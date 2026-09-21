@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from secrets import token_hex
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 import psycopg
 from psycopg.rows import dict_row
 
@@ -112,16 +111,6 @@ def init_db():
         message TEXT NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS media(
-        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        student_id INTEGER NOT NULL,
-        filename TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        data BYTEA NOT NULL,
-        caption TEXT DEFAULT '',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_media_student_created ON media(student_id,created_at DESC)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_coach_notifications_created ON coach_notifications(created_at DESC)")
     # Migrate the previous version's column named "full" when it exists.
     c.execute("""DO $$
@@ -479,9 +468,8 @@ def nuevo():
             f"Zona: {zone}\nModalidad: {mode}\nParque o dirección: {place}\n"
             f"Turno preferido: {turn}\nHorario de interés: {schedule_day} · {display_time(schedule_time) if schedule_time != "Consultar disponibilidad" else schedule_time}\nFotos/videos: {photo_consent or 'Por coordinar'}"
         )
-        whatsapp_url = f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}"
         c.close()
-        return render_template("received.html", whatsapp_url=whatsapp_url)
+        return redirect(f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
     availability_rows = c.execute(
         """SELECT * FROM availability WHERE active=TRUE ORDER BY zone, CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4
@@ -775,9 +763,10 @@ def save_optional_payment(c, sid, form, created_ids):
 def delete_student(sid):
     c=db(); s=c.execute("SELECT * FROM students WHERE id=%s",(sid,)).fetchone()
     if not s: c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
-    # No se borran alumnos, clases ni pagos: se conserva el historial.
-    c.execute("UPDATE students SET status='inactive' WHERE id=%s",(sid,))
-    c.commit(); c.close(); flash("Alumno archivado. Su historial de clases y pagos se conserva."); return redirect(url_for("students"))
+    user_id=s["user_id"]
+    c.execute("DELETE FROM classes WHERE student_id=%s",(sid,)); c.execute("DELETE FROM payments WHERE student_id=%s",(sid,)); c.execute("DELETE FROM students WHERE id=%s",(sid,))
+    if user_id and not c.execute("SELECT 1 FROM students WHERE user_id=%s LIMIT 1",(user_id,)).fetchone(): c.execute("DELETE FROM users WHERE id=%s AND role='parent'",(user_id,))
+    c.commit(); c.close(); flash("Alumno eliminado definitivamente junto con sus clases y pagos registrados."); return redirect(url_for("students"))
 
 
 @app.route("/entrenador/alumno/<int:sid>/editar", methods=["GET", "POST"])
@@ -869,13 +858,6 @@ def edit_class(class_id):
     if request.method == "POST":
         new_date = request.form.get("date", "").strip()
         new_time = request.form.get("time", "").strip()
-        new_mode = request.form.get("mode", current.get("mode") or "Parque").strip()
-        new_place = request.form.get("place", current.get("place") or "").strip()
-        new_notes = request.form.get("notes", current.get("notes") or "").strip()
-        if new_mode not in ("Parque", "Domicilio"):
-            new_mode = current.get("mode") or "Parque"
-        if not new_place:
-            c.close(); flash("Indica el lugar de la clase."); return redirect(url_for("edit_class", class_id=class_id))
         try:
             selected = date.fromisoformat(new_date)
             datetime.strptime(new_time, "%H:%M")
@@ -883,17 +865,17 @@ def edit_class(class_id):
             c.close(); flash("La fecha u hora no son válidas."); return redirect(url_for("edit_class", class_id=class_id))
         if selected.weekday() > 5:
             c.close(); flash("No se pueden agendar clases los domingos."); return redirect(url_for("edit_class", class_id=class_id))
-        conflicts = c.execute("""SELECT id,student_id,mode,place,session_group_id FROM classes
+        conflict = c.execute("""SELECT id,student_id,mode,place,session_group_id FROM classes
             WHERE date=%s AND time=%s AND id<>%s
-            AND status IN ('scheduled','rescheduled','postponed')""",
-            (new_date, new_time, class_id)).fetchall()
-        for conflict in conflicts:
+            AND status IN ('scheduled','rescheduled','postponed') LIMIT 1""",
+            (new_date, new_time, class_id)).fetchone()
+        if conflict:
             same_group = bool(current.get("session_group_id") and conflict.get("session_group_id") == current.get("session_group_id"))
             same_student = conflict["student_id"] == current["student_id"]
             if not (same_group or same_student):
                 c.close(); flash("Ese horario ya está ocupado por otra actividad."); return redirect(url_for("edit_class", class_id=class_id))
         old_date, old_time = current["date"], current["time"]
-        c.execute("UPDATE classes SET date=%s,time=%s,mode=%s,place=%s,notes=%s WHERE id=%s", (new_date, new_time, new_mode, new_place, new_notes, class_id))
+        c.execute("UPDATE classes SET date=%s,time=%s WHERE id=%s", (new_date, new_time, class_id))
         c.commit(); c.close()
         if old_date != new_date or old_time != new_time:
             flash(f"Clase corregida: {current['student_name']} · {display_date(new_date)} · {display_time(new_time)}.")
@@ -926,10 +908,9 @@ def update_class_status(class_id):
 @app.route("/entrenador/clase/<int:class_id>/eliminar", methods=["POST"])
 @coach_required
 def delete_class(class_id):
-    # Historical classes are never physically deleted. Treat this legacy action as cancellation.
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
-    c.execute("UPDATE classes SET status='cancelled',payment_id=NULL,payment_status='pending' WHERE id=%s",(class_id,)); c.commit(); c.close(); flash("Clase anulada. El registro queda en el historial."); return redirect(request.referrer or url_for("dashboard"))
+    c.execute("DELETE FROM classes WHERE id=%s",(class_id,)); c.commit(); c.close(); flash("Clase eliminada."); return redirect(request.referrer or url_for("dashboard"))
 
 
 @app.route("/entrenador/clases/nueva", methods=["GET","POST"])
@@ -1064,53 +1045,6 @@ def teams():
     rows=c.execute("SELECT * FROM teams ORDER BY date,time").fetchall(); c.close(); return render_template("teams.html",teams=rows)
 
 
-@app.route("/entrenador/galeria")
-@coach_required
-def coach_gallery():
-    c=db(); rows=c.execute("""SELECT media.*,students.student_name FROM media JOIN students ON students.id=media.student_id ORDER BY media.created_at DESC,media.id DESC""").fetchall(); c.close()
-    return render_template("coach_gallery.html", media=rows)
-
-@app.route("/entrenador/alumno/<int:sid>/galeria/subir", methods=["POST"])
-@coach_required
-def upload_media(sid):
-    c=db(); student=c.execute("SELECT * FROM students WHERE id=%s",(sid,)).fetchone()
-    if not student:
-        c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
-    f=request.files.get("file"); caption=request.form.get("caption","").strip()
-    if not f or not f.filename:
-        c.close(); flash("Selecciona una foto o video."); return redirect(url_for("student_detail",sid=sid))
-    allowed={"image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm","video/quicktime"}
-    if (f.mimetype or "") not in allowed:
-        c.close(); flash("Formato no permitido. Usa JPG, PNG, WEBP, GIF, MP4, WEBM o MOV."); return redirect(url_for("student_detail",sid=sid))
-    data=f.read()
-    if len(data)>15*1024*1024:
-        c.close(); flash("El archivo supera el límite de 15 MB."); return redirect(url_for("student_detail",sid=sid))
-    filename=secure_filename(f.filename) or "archivo"
-    c.execute("INSERT INTO media(student_id,filename,mime_type,data,caption) VALUES(%s,%s,%s,%s,%s)",(sid,filename,f.mimetype,data,caption))
-    c.commit(); c.close(); flash("Archivo agregado a la galería del alumno."); return redirect(url_for("student_detail",sid=sid))
-
-@app.route("/entrenador/media/<int:media_id>")
-@coach_required
-def coach_media(media_id):
-    c=db(); row=c.execute("SELECT * FROM media WHERE id=%s",(media_id,)).fetchone(); c.close()
-    if not row: return ("Archivo no encontrado",404)
-    from flask import Response
-    return Response(bytes(row["data"]),mimetype=row["mime_type"],headers={"Content-Disposition":f'inline; filename="{row["filename"]}"'})
-
-@app.route("/alumno/galeria")
-def parent_gallery():
-    if session.get("role")!="parent": return redirect(url_for("parent_login"))
-    c=db(); rows=c.execute("""SELECT media.*,students.student_name FROM media JOIN students ON students.id=media.student_id WHERE students.user_id=%s AND students.status='active' ORDER BY media.created_at DESC,media.id DESC""",(session["user_id"],)).fetchall(); c.close()
-    return render_template("parent_gallery.html", media=rows)
-
-@app.route("/alumno/media/<int:media_id>")
-def parent_media(media_id):
-    if session.get("role")!="parent": return redirect(url_for("parent_login"))
-    c=db(); row=c.execute("""SELECT media.* FROM media JOIN students ON students.id=media.student_id WHERE media.id=%s AND students.user_id=%s AND students.status='active'""",(media_id,session["user_id"])).fetchone(); c.close()
-    if not row: return ("Archivo no encontrado",404)
-    from flask import Response
-    return Response(bytes(row["data"]),mimetype=row["mime_type"],headers={"Content-Disposition":f'inline; filename="{row["filename"]}"'})
-
 @app.route("/alumno/login", methods=["GET","POST"])
 def parent_login():
     if request.method=="POST":
@@ -1225,11 +1159,15 @@ def reschedule(class_id):
     c=db(); current=c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone,students.parent_name
         FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s AND students.user_id=%s""",(class_id,session["user_id"])).fetchone()
     if not current: c.close(); flash("Clase no encontrada."); return redirect(url_for("parent_home"))
-    next_class=c.execute("""SELECT classes.id FROM classes JOIN students ON students.id=classes.student_id
-        WHERE students.user_id=%s AND classes.date>=%s AND classes.status IN ('scheduled','rescheduled','postponed')
-        ORDER BY classes.date,classes.time,classes.id LIMIT 1""",(session["user_id"],datetime.now(PERU_TZ).date().isoformat())).fetchone()
+    # La reprogramación directa se aplica a la próxima clase del alumno seleccionado,
+    # no a la próxima clase global de toda la cuenta. Esto permite que una familia
+    # con varios hijos gestione correctamente a cada alumno.
+    next_class=c.execute("""SELECT classes.id FROM classes
+        WHERE classes.student_id=%s AND classes.date>=%s
+        AND classes.status IN ('scheduled','rescheduled','postponed')
+        ORDER BY classes.date,classes.time,classes.id LIMIT 1""",(current["student_id"],datetime.now(PERU_TZ).date().isoformat())).fetchone()
     if not next_class or next_class["id"]!=class_id:
-        c.close(); flash("Esta clase no está disponible para reprogramación directa."); return redirect(url_for("parent_home"))
+        c.close(); flash("Esta no es la próxima clase de este alumno. La reprogramación directa corresponde a su próxima clase."); return redirect(url_for("parent_home"))
     if current["status"] not in ("scheduled","rescheduled","postponed"):
         c.close(); flash("Esta clase no está disponible para reprogramación directa."); return redirect(url_for("parent_home"))
     try: original_dt=parse_iso_datetime(current["date"],current["time"])
