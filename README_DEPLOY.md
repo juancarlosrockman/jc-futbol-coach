@@ -1,4 +1,4 @@
-# JC Fútbol Coach — versión 12.2
+# JC Fútbol Coach — versión 12.3
 
 Base real Flask + PostgreSQL/Supabase para desplegar en GitHub/Render.
 
@@ -48,3 +48,11 @@ No colocar estas credenciales dentro del código ni subir un archivo `.env` a Gi
 - Integración visual del mockup sobre la base funcional, sin sustituir la lógica de agenda, pagos, reprogramación ni lista de espera.
 - Corregida la estructura HTML del bloque de estilos para evitar estilos anidados inválidos.
 - Portada alineada con el mockup aprobado: “Movimiento · Coordinación · Fundamentos”, “En Lima”, “Parques o domicilio”, “Coach Juan Carlos” y “ESTUDIOS FPF”.
+
+## Revisión 12.3
+- Se mantiene la aplicación real Flask/PostgreSQL como base; no se reemplaza por el mockup HTML.
+- Si todavía no existen zonas configuradas por el Coach, el flujo de nuevo alumno ofrece “A coordinar con el Coach” para evitar un bloqueo. Cuando existan zonas publicadas, se muestran las zonas configuradas.
+- Cuando el turno está marcado como agenda llena, el flujo del nuevo alumno se detiene en “AGENDA LLENA” y no permite avanzar a datos/confirmación; la lista de espera queda como alternativa.
+- Ajustada la portada: en móvil la foto aprobada queda ligeramente más arriba; en pantallas grandes la foto queda visualmente a la izquierda y la información/accesos a la derecha.
+- La foto utilizada sigue siendo únicamente la aprobada: polo blanco y estadio de fondo.
+- Revisión técnica realizada: compilación Python, sintaxis Jinja, sintaxis JavaScript, archivos esenciales y prueba de integridad del ZIP.

@@ -442,6 +442,8 @@ def nuevo():
         photo_consent = request.form.get("photo_consent", "").strip()
         if not parent_name or not whatsapp or not student_name or not age or not zone or not place or not turn:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
+        if zone == "__coordinar__":
+            zone = "A coordinar con el Coach"
         if turn not in TURN_ORDER:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
         current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
@@ -449,7 +451,9 @@ def nuevo():
         if closed and closed["is_full"]:
             c.close(); flash("La agenda de ese turno está llena. Puedes unirte a la lista de espera."); return redirect(url_for("nuevo"))
         schedule_day, schedule_time = "", ""
-        if schedule:
+        if schedule == "__coordinar__|__coordinar__":
+            schedule_day, schedule_time = "A coordinar", "Con el Coach"
+        elif schedule:
             try:
                 schedule_day, schedule_time = schedule.split("|", 1)
                 datetime.strptime(schedule_time, "%H:%M")
