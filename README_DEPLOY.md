@@ -1,4 +1,4 @@
-# JC Fútbol Coach — versión 11
+# JC Fútbol Coach — versión 12.2
 
 Base real Flask + PostgreSQL/Supabase para desplegar en GitHub/Render.
 
@@ -40,7 +40,11 @@ No colocar estas credenciales dentro del código ni subir un archivo `.env` a Gi
 - Corregida la lectura del estado `is_full` de la agenda.
 - Corregido el monto visual del paquete de 8 clases a S/600.
 - El alumno actual ya no entra en la lista de espera destinada a nuevos alumnos; cuando no encuentra horario, se le deriva a coordinación por WhatsApp.
-- El acceso del Coach deja de mostrarse en la interfaz pública; la ruta privada se conserva.
+- El acceso del Coach está disponible desde el menú público; la ruta privada se conserva.
 - Corregida la edición de clases para evitar mover una clase sobre otra actividad ocupada, salvo clases que pertenezcan al mismo grupo.
-- Se incorpora la foto real del Coach en el panel.
+- Se incorpora la foto aprobada del Coach (polo blanco, estadio de fondo) en la portada y el panel.
 - Se conserva la lógica de Supabase/PostgreSQL, cuentas de padres, múltiples hijos, pagos, clases recurrentes, disponibilidad, reprogramación y avisos.
+
+- Integración visual del mockup sobre la base funcional, sin sustituir la lógica de agenda, pagos, reprogramación ni lista de espera.
+- Corregida la estructura HTML del bloque de estilos para evitar estilos anidados inválidos.
+- Portada alineada con el mockup aprobado: “Movimiento · Coordinación · Fundamentos”, “En Lima”, “Parques o domicilio”, “Coach Juan Carlos” y “ESTUDIOS FPF”.
