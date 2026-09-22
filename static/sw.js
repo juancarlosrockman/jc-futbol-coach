@@ -1,6 +1,5 @@
-const CACHE_NAME = 'jcfc-pwa-v2';
+const CACHE_NAME = 'jcfc-pwa-v3';
 const APP_SHELL = [
-  '/',
   '/static/logo.jpg',
   '/static/jc_coach_photo.png',
   '/static/icon-192.png',
@@ -15,6 +14,12 @@ self.addEventListener('activate', event => {
 });
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  // Never cache HTML/navigation responses: parent and Coach screens can contain personal data.
+  if (event.request.mode === 'navigate' || url.pathname === '/' || !url.pathname.startsWith('/static/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
   event.respondWith(fetch(event.request).then(response => {
     const copy = response.clone();
     caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
