@@ -3,7 +3,7 @@
 <div class="card">
   <h1>Registrar alumno</h1>
   <p class="muted">Puedes registrar al alumno y sus próximas clases en un solo paso.</p>
-  <form method="post" id="studentForm">
+  <form method="post" id="studentForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid">
       <div>
         <h3>Datos del alumno y padre/madre</h3>

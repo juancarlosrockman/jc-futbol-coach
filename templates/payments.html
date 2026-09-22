@@ -4,7 +4,7 @@
 <div class="card">
   <h2>Registrar pago</h2>
   <p class="small muted">Cada alumno puede tener una tarifa distinta. El monto recibido determina cuántas clases cubre el pago mensual.</p>
-  <form method="post">
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Alumno</label><select name="student_id" id="paymentStudent" required>{% for s in students %}<option value="{{s.id}}" data-tariff="{{s.tariff}}">{{s.student_name}} · S/ {{s.tariff|int}} por clase</option>{% endfor %}</select>
     <label>Tipo de pago</label><select name="payment_type" id="ptype" onchange="changeType()"><option value="regular">Pago mensual</option><option value="package_8">Paquete especial de 8 clases — S/600</option></select>
     <div id="regularFields"><label>Mes / período</label><input name="month" type="month" value="{{request.form.get('month','')}}" required><label>Monto recibido (S/)</label><input name="amount" id="amount" type="number" step="0.01" min="0" required></div>

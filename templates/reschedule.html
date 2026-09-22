@@ -14,7 +14,7 @@
   </div>
   {% if slots %}
   <h2 style="margin-top:18px">{% if reschedule_count == 0 %}Opciones para el siguiente mes{% else %}Opciones de recuperación para este mes{% endif %}</h2>
-  <form method="post" id="resForm">
+  <form method="post" id="resForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="slot-list">{% for x in slots %}<label class="slot"><span><input type="radio" name="slot" value="{{x.date}}|{{x.time}}" onchange="pick('{{x.date}}','{{x.time}}')"> <b>{{x.day}} {{display_date(x.date)}}</b><br><small style="margin-left:23px">{{display_time(x.time)}} · {{x.turn}}</small></span></label>{% endfor %}</div>
     <input type="hidden" name="date" id="date"><input type="hidden" name="time" id="time">
     <button class="btn green" type="submit">Confirmar nueva fecha</button>

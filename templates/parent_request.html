@@ -26,7 +26,7 @@
   <select id="turnFilter"><option value="">Todos los turnos</option><option value="Mañana">☀️ Mañana</option><option value="Tarde / noche">🌤️ Tarde / noche</option></select>
   <div id="agendaMessage"></div>
   {% if slots %}
-  <form method="post">
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="student_id" value="{{selected.id}}">
     {% for x in slots %}
     <label class="slot">

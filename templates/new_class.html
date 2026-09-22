@@ -1,7 +1,7 @@
 {% extends "layout.html" %}{% block content %}
 <a class="back" href="{{url_for('dashboard')}}">← Panel</a>
 <div class="card"><h1>Agendar clases</h1><p class="muted">Coach Juan Carlos puede agendar una o varias fechas reales. Puedes programar más clases de las cubiertas por el pago; esas quedarán como <b>pendientes de pago</b>.</p>
-<form method="post" id="classForm">
+<form method="post" id="classForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Alumno</label><select name="student_id" id="student_id" required>{% for s in students %}<option value="{{s.id}}" data-zone="{{s.zone or ''}}" data-place="{{s.place or ''}}" data-tariff="{{s.tariff}}" {% if selected and selected.id==s.id %}selected{% endif %}>{{s.student_name}} — S/{{s.tariff|int}} por clase</option>{% endfor %}</select>
 <div id="groups"></div><button type="button" class="btn light" onclick="addGroup()">+ Agregar otro horario</button>
 <hr><h3>💰 Pago mensual (opcional)</h3><label>¿Pago recibido?</label><select name="payment_received" id="payment_received" onchange="togglePay()"><option value="no">No, pagará después</option><option value="yes">Sí, ya pagó</option></select>
