@@ -11,6 +11,7 @@
     <div class="hero-credential"><span></span> ESTUDIOS FPF</div>
     <a class="hero-btn primary" href="{{url_for('nuevo')}}"><span>♟ &nbsp; ¿Eres nuevo?<small style="display:block;font-weight:500;font-size:11px;margin-left:28px">Solicita tu entrenamiento</small></span><span>›</span></a>
     <a class="hero-btn secondary" href="{{url_for('parent_login')}}"><span>▣ &nbsp; Alumno actual<small style="display:block;font-weight:500;font-size:11px;margin-left:28px;color:#69746e">Ingresa a tu cuenta</small></span><span>›</span></a>
+    <button type="button" class="hero-btn secondary install-app-btn" style="display:none;border:1px solid #dbe9df;color:#08783d" onclick="installJCFC()"><span>📱 &nbsp; Agregar Futbol al celular<small style="display:block;font-weight:500;font-size:11px;margin-left:28px;color:#69746e">Instálalo en tu pantalla de inicio</small></span><span>›</span></button>
   </div>
 </div>
 <div class="drawer" id="publicMenu" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('publicMenu').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a href="{{url_for('home')}}">⌂ &nbsp; Inicio</a><a href="{{url_for('nuevo')}}">⚽ &nbsp; Solicitar clase</a><a href="{{url_for('equipo')}}">★ &nbsp; Servicios</a><a href="{{url_for('espera')}}">◷ &nbsp; Lista de espera</a><a href="{{url_for('coach_login')}}">⚙ &nbsp; Acceso Coach</a><div class="spacer"></div></div></div>

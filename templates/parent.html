@@ -10,6 +10,7 @@
 <div class="parent-greeting">
   <h1>Hola, {{children[0].student.parent_name.split()[0]}} 👋</h1>
   <p>Aquí puedes ver la información de tus clases.</p>
+  <button type="button" class="btn light install-app-btn" style="display:none;width:100%;margin-top:10px;text-align:left" onclick="installJCFC()">📱 <b>Agregar Futbol al celular</b><br><small>Instálalo en tu pantalla de inicio para acceder más rápido.</small></button>
 </div>
 
 {% if children|length > 1 %}

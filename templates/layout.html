@@ -1,6 +1,9 @@
 <!doctype html>
 <html lang="es">
 <head>
+<link rel="manifest" href="{{url_for('manifest')}}">
+<link rel="apple-touch-icon" href="{{url_for('static',filename='apple-touch-icon.png')}}">
+<meta name="theme-color" content="#08783d">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#08783d">
 <title>{{ app_name }}</title>
 <style>html,body{margin:0;padding:0;width:100%;min-height:100%;overflow-x:hidden}body{min-height:100vh}.wrap{box-sizing:border-box}.home-page{height:100dvh;min-height:100dvh;max-height:100dvh;overflow:hidden;overflow-y:hidden;overscroll-behavior:none;background:#092d1d;position:fixed;inset:0;width:100%}.home-page .wrap{width:100%;max-width:none;padding:0;height:100%;}.home-page .public-hero{height:100%;min-height:100%;max-height:none;width:100%;overflow:hidden}
@@ -22,7 +25,7 @@ body{background:#f5f8f6;color:var(--ink)}
 .btn{border-radius:12px;min-height:42px}.green{background:var(--g)}
 /* Home: ordenado y estable en móviles */
 .home-page{background:#071e15}.home-page .wrap{padding:0}.home-page .public-hero{height:100dvh;min-height:100dvh;padding:0;justify-content:flex-end;background:#09251a;position:relative}
-.home-page .public-hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,28,18,.12) 0%,rgba(3,28,18,.22) 38%,rgba(3,20,13,.92) 100%),url('/static/jc_coach_photo.png') center 10%/cover no-repeat;filter:none}
+.home-page .public-hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,28,18,.12) 0%,rgba(3,28,18,.22) 38%,rgba(3,20,13,.92) 100%),url('/static/jc_coach_photo.png') center 4%/cover no-repeat;filter:none}
 .home-page .public-hero:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(2,17,11,.76) 72%,rgba(2,14,9,.97) 100%);pointer-events:none}
 .home-page .hero-content{width:min(100%,520px);padding:0 22px 22px;margin:auto auto 0;position:relative;z-index:2}
 .home-page .hero-logo{width:92px;height:92px;margin:0 auto 18px;border:2px solid #fff;background:#fff;box-shadow:0 5px 18px #0005}
@@ -42,7 +45,7 @@ body{background:#f5f8f6;color:var(--ink)}
 /* Coach */
 .coach-hero{background:linear-gradient(135deg,#083b25,#0b7c41);color:#fff;border:0}.coach-hero .muted{color:#d6eee0}.coach-hero .btn.light{background:#fff;color:var(--g)}
 @media(min-width:700px){
-.home-page .public-hero:before{background-position:left 10%} 
+.home-page .public-hero:before{background-position:left 4%} 
 .home-page .hero-content{width:min(520px,46vw);margin-left:auto;margin-right:6%;padding:0 0 38px}
 .home-page .hero-logo{margin-left:0;margin-right:auto}
 .home-page .hero-kicker,.home-page .hero-sub,.home-page .hero-coach-name,.home-page .hero-credential{text-align:left}
@@ -58,4 +61,21 @@ body{background:#f5f8f6;color:var(--ink)}
 {% elif session.get('role')=='coach' %}
 <nav class="nav"><a href="{{url_for('dashboard')}}">⌂<br>Inicio</a><a href="{{url_for('new_class')}}">▣<br>Agenda</a><a href="{{url_for('students')}}">♟<br>Alumnos</a><a href="{{url_for('availability')}}">◷<br>Dispon.</a><a href="{{url_for('payments')}}">▤<br>Pagos</a></nav>
 {% endif %}
-</body></html>
+<script>
+let deferredInstallPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;document.querySelectorAll('.install-app-btn').forEach(b=>b.style.display='block');});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;document.querySelectorAll('.install-app-btn').forEach(b=>b.style.display='none');});
+function installJCFC(){
+  const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone;
+  if(standalone)return;
+  if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt.userChoice.finally(()=>{deferredInstallPrompt=null;});return;}
+  if(isIOS){alert('Para agregar Futbol a tu pantalla de inicio: toca Compartir y luego “Agregar a pantalla de inicio”.');}
+}
+window.addEventListener('load',()=>{
+  const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone;
+  if(ios&&!standalone)document.querySelectorAll('.install-app-btn').forEach(b=>b.style.display='block');
+});
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));}
+</script></body></html>

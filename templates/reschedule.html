@@ -1,8 +1,27 @@
-{% extends "layout.html" %}
-{% block content %}
-<a class="back" href="{{url_for('student_detail',sid=current.student_id) if coach_mode else url_for('parent_home')}}">← {{'Ficha del alumno' if coach_mode else 'Mis clases'}}</a>
-<div class="card"><div class="eyebrow">ALUMNO ACTUAL</div><h1>Reprogramar clase</h1><p class="muted">{{'Coach Juan Carlos puede elegir un espacio de recuperación para este alumno.' if coach_mode else 'Selecciona un horario disponible para la zona de ' + (current.student_zone or 'tu alumno') + '.'}}</p><div class="notice"><b>Clase actual</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or 'Lugar por indicar'}}</div></div>
-<div class="card"><h2>Horarios disponibles</h2><p class="small muted">Puedes elegir una fecha futura dentro de los espacios disponibles. Los espacios de recuperación son para alumnos actuales y no aparecen en la solicitud de nuevos alumnos.</p>
-{% if slots %}<form method="post" id="resForm"><div class="slot-list">{% for x in slots %}<label class="slot"><span><input type="radio" name="slot" value="{{x.date}}|{{x.time}}" onchange="pick('{{x.date}}','{{x.time}}')"> <b>{{x.day}} {{display_date(x.date)}}</b><br><small style="margin-left:23px">{{display_time(x.time)}} · {{x.turn}}</small></span></label>{% endfor %}</div><input type="hidden" name="date" id="date"><input type="hidden" name="time" id="time"><div class="notice" style="margin-top:12px">La reprogramación directa está disponible hasta 2 horas antes de la clase. Si ya estás dentro de ese plazo, o Coach Juan Carlos ya llegó al lugar, comunícate por WhatsApp.</div><button class="btn green">Confirmar nueva fecha</button></form>{% else %}<div class="notice">No hay un espacio de recuperación disponible en este momento.</div><a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito coordinar la reprogramación de una clase.')}}">📲 Coordinar por WhatsApp</a>{% endif %}
+{% extends "layout.html" %}{% block content %}
+<a class="back" href="{{url_for('parent_home')}}">← Volver</a>
+<div class="card">
+  <div class="eyebrow">ALUMNO ACTUAL</div><h1>Reprogramar clase</h1>
+  <div class="notice"><b>Clase actual</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or 'Lugar por indicar'}}</div>
+  <div class="notice" style="margin-top:10px">
+    <b>🔄 Indicaciones para reprogramar</b><br><br>
+    • Puedes realizar una <b>primera reprogramación hasta 2 horas antes</b> del inicio de la clase.<br>
+    • En la <b>primera reprogramación</b>, se te mostrará la opción de pasar la clase al <b>siguiente mes</b>, según los horarios disponibles.<br>
+    • <b>A partir de la segunda reprogramación</b>, la clase deberá recuperarse <b>dentro del mismo mes</b>, coordinando con Coach Juan Carlos según los horarios disponibles.<br>
+    • Si no hubiera un horario disponible, <b>Coach Juan Carlos te informará si se libera un espacio</b>.<br>
+    • Si tienes una emergencia dentro de las 2 horas previas, comunícate directamente con <b>Coach Juan Carlos por WhatsApp</b>.<br>
+    • <b>Si Coach Juan Carlos ya se encuentra llegando al lugar de entrenamiento, la clase se considera programada y realizada.</b>
+  </div>
+  {% if slots %}
+  <h2 style="margin-top:18px">{% if reschedule_count == 0 %}Opciones para el siguiente mes{% else %}Opciones de recuperación para este mes{% endif %}</h2>
+  <form method="post" id="resForm">
+    <div class="slot-list">{% for x in slots %}<label class="slot"><span><input type="radio" name="slot" value="{{x.date}}|{{x.time}}" onchange="pick('{{x.date}}','{{x.time}}')"> <b>{{x.day}} {{display_date(x.date)}}</b><br><small style="margin-left:23px">{{display_time(x.time)}} · {{x.turn}}</small></span></label>{% endfor %}</div>
+    <input type="hidden" name="date" id="date"><input type="hidden" name="time" id="time">
+    <button class="btn green" type="submit">Confirmar nueva fecha</button>
+  </form>
+  {% else %}
+  <div class="notice" style="margin-top:12px">No hay un espacio de recuperación disponible para esta reprogramación.</div>
+  <a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito coordinar la reprogramación de una clase.')}}">📲 Coordinar con Coach Juan Carlos</a>
+  {% endif %}
 </div><script>function pick(d,t){document.getElementById('date').value=d;document.getElementById('time').value=t}</script>
 {% endblock %}
