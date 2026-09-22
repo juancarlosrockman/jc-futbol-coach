@@ -1,10 +1,8 @@
-12.8
+12.9
 
 Cambios de esta versión:
-- Refuerzo de sesiones: cookies Secure, HttpOnly y SameSite=Lax, con nombre de sesión propio.
-- Protección CSRF para todas las solicitudes POST mediante token de sesión.
-- Límite de intentos fallidos de acceso para Coach y alumnos: 8 intentos por IP en 15 minutos.
-- Cabeceras de seguridad: CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP y HSTS cuando la conexión es HTTPS.
-- Las pantallas autenticadas se sirven con Cache-Control: no-store.
-- El service worker ya no almacena páginas HTML ni pantallas autenticadas; solo recursos estáticos.
-- Se conserva toda la lógica funcional de la versión 12.7.
+- Corrección de la portada móvil: el botón “Alumno actual” ya no queda cortado en pantallas de menor altura.
+- La portada ahora permite desplazamiento vertical como respaldo, sin bloquear el contenido.
+- Ajuste responsive de tamaños y espacios para que las dos opciones principales queden visibles con mayor consistencia.
+- Se conserva la seguridad incorporada en la versión 12.8.
+- No se modifica ninguna regla de negocio, agenda, precios, login ni flujo de alumnos.
