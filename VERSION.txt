@@ -1,16 +1,8 @@
-12.6
+12.7
 
 Cambios de esta versión:
-- Nuevo alumno: selector entre padre/madre/apoderado y alumno para mayores de edad.
-- Precios actualizados en el flujo nuevo: 3 años individual S/50 y 2 niños S/80; 4–5 años individual S/65 y 2 niños S/110; 6+ individual S/80, paquete 8 S/600, 2 alumnos S/140, 3 alumnos S/180.
-- Reprogramación de alumno actual: primera reprogramación al siguiente mes; desde la segunda, recuperación dentro del mismo mes.
-- Indicaciones completas de reprogramación y separación de la reprogramación hecha por Coach Juan Carlos.
-- PWA instalable: icono del escudo y nombre "Futbol" en la pantalla del celular.
-- Ajuste de la posición vertical de la foto del Coach hacia arriba en PC y celular.
-- Se conserva el flujo existente de agenda, lista de espera, WhatsApp, pagos y acceso.
-
-- Home: foto del Coach reencuadrada más arriba en celular y PC.
-- Home: retirado el botón grande de instalación y movida la opción “Agregar Futbol al celular” al menú.
-- PWA: la opción de instalación se oculta después de instalarse y al abrirse como app.
-- Menú: botón hamburguesa con líneas centradas y opciones más grandes y legibles.
-- Alumno nuevo adulto: el mensaje de WhatsApp identifica correctamente al alumno como quien realiza la inscripción.
+- Home: reencuadre vertical de la foto del Coach más arriba en celular y PC, siguiendo la referencia visual indicada por el usuario. La referencia naranja no forma parte del diseño.
+- PWA: iconos del escudo con fondo transparente y forma circular, para que el icono de “Futbol” se vea redondo.
+- PWA: se mantiene el nombre “Futbol” y el modo standalone.
+- PWA: caché actualizado a v2 para forzar la carga de los nuevos iconos y estilos.
+- Se conservan todos los cambios y reglas incorporados en la versión 12.6.
