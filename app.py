@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, Response
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, Response, abort
 import os
 import uuid
 import re
@@ -12,7 +12,17 @@ import psycopg
 from psycopg.rows import dict_row
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY") or token_hex(32)
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError("Falta la variable de entorno SECRET_KEY. Configúrala en Render antes de iniciar la app.")
+app.secret_key = SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_NAME="jcfc_session",
+    MAX_CONTENT_LENGTH=512 * 1024,
+)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 COACH_WHATSAPP = "51993757225"
 DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
@@ -102,6 +112,13 @@ def init_db():
         turn TEXT NOT NULL, is_full BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
     c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
+    c.execute("""CREATE TABLE IF NOT EXISTS login_attempts(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        ip TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_endpoint_time ON login_attempts(ip,endpoint,attempted_at DESC)")
     c.execute("""CREATE TABLE IF NOT EXISTS coach_notifications(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -164,6 +181,90 @@ def coach_required(f):
 
 def normalize_whatsapp(value):
     return re.sub(r"\D", "", value or "")
+
+
+def csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = token_hex(32)
+        session["csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_security_helpers():
+    return {"csrf_token": csrf_token}
+
+
+@app.before_request
+def protect_state_changing_requests():
+    if request.method == "POST":
+        expected = session.get("csrf_token")
+        provided = request.form.get("csrf_token", "")
+        if not expected or not provided or not secrets_compare(expected, provided):
+            abort(400, description="Solicitud no válida. Recarga la página e inténtalo nuevamente.")
+
+
+def secrets_compare(a, b):
+    import hmac
+    return hmac.compare_digest(str(a), str(b))
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    if request.is_secure or request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "img-src 'self' data:; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "manifest-src 'self'; "
+        "worker-src 'self'"
+    )
+    if session.get("role") in ("coach", "parent"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
+LOGIN_MAX_FAILURES = 8
+LOGIN_WINDOW_MINUTES = 15
+
+def client_ip():
+    # Do not trust user-supplied forwarding headers for the security limit.
+    return request.remote_addr or "unknown"
+
+
+def login_is_rate_limited(endpoint):
+    c = db()
+    c.execute("DELETE FROM login_attempts WHERE attempted_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'")
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM login_attempts WHERE ip=%s AND endpoint=%s AND attempted_at >= CURRENT_TIMESTAMP - INTERVAL '15 minutes'",
+        (client_ip(), endpoint)
+    ).fetchone()
+    c.commit(); c.close()
+    return int(row["n"] or 0) >= LOGIN_MAX_FAILURES
+
+
+def record_login_failure(endpoint):
+    c = db()
+    c.execute("INSERT INTO login_attempts(ip,endpoint) VALUES(%s,%s)", (client_ip(), endpoint))
+    c.commit(); c.close()
+
+
+def clear_login_failures(endpoint):
+    c = db()
+    c.execute("DELETE FROM login_attempts WHERE ip=%s AND endpoint=%s", (client_ip(), endpoint))
+    c.commit(); c.close()
 
 
 def merge_duplicate_parent_accounts(c):
@@ -547,14 +648,19 @@ def contacto_whatsapp():
 @app.route("/entrenador/login", methods=["GET", "POST"])
 def coach_login():
     if request.method == "POST":
+        if login_is_rate_limited("coach"):
+            flash("Demasiados intentos. Espera unos minutos y vuelve a intentarlo.")
+            return render_template("coach_login.html")
         c = db(); user = request.form.get("user", "").strip(); password = request.form.get("password", "").strip()
         u = c.execute("SELECT * FROM users WHERE role='coach' AND name=%s", (user,)).fetchone()
         valid = password_matches(u["password"], password) if u else False
         if valid:
             if not password_is_hashed(u["password"]):
                 c.execute("UPDATE users SET password=%s WHERE id=%s", (hash_password(password), u["id"])); c.commit()
-            c.close(); session["role"] = "coach"; session["user_id"] = u["id"]; return redirect(url_for("dashboard"))
-        c.close()
+            c.close(); clear_login_failures("coach")
+            session.clear(); session["role"] = "coach"; session["user_id"] = u["id"]; csrf_token()
+            return redirect(url_for("dashboard"))
+        c.close(); record_login_failure("coach")
         flash("Usuario o contraseña incorrectos.")
     return render_template("coach_login.html")
 
@@ -1067,14 +1173,19 @@ def teams():
 @app.route("/alumno/login", methods=["GET","POST"])
 def parent_login():
     if request.method=="POST":
+        if login_is_rate_limited("parent"):
+            flash("Demasiados intentos. Espera unos minutos y vuelve a intentarlo.")
+            return render_template("parent_login.html")
         whatsapp=normalize_whatsapp(request.form.get("whatsapp","")); password=request.form.get("password","").strip(); c=db()
         candidates=c.execute("SELECT * FROM users WHERE role='parent'").fetchall()
         u=next((x for x in candidates if normalize_whatsapp(x["whatsapp"])==whatsapp and password_matches(x["password"], password)),None)
         if u:
             if not password_is_hashed(u["password"]):
                 c.execute("UPDATE users SET password=%s WHERE id=%s", (hash_password(password), u["id"])); c.commit()
-            c.close(); session["role"]="parent"; session["user_id"]=u["id"]; return redirect(url_for("parent_home"))
-        c.close()
+            c.close(); clear_login_failures("parent")
+            session.clear(); session["role"]="parent"; session["user_id"]=u["id"]; csrf_token()
+            return redirect(url_for("parent_home"))
+        c.close(); record_login_failure("parent")
         flash("Datos incorrectos. Usa el WhatsApp registrado y tu contraseña.")
     return render_template("parent_login.html")
 
@@ -1255,6 +1366,10 @@ def coach_reschedule(class_id):
 @app.route("/logout")
 def logout(): session.clear(); return redirect(url_for("home"))
 
+
+@app.errorhandler(400)
+def bad_request(error):
+    return render_template("error.html", code=400, message=getattr(error, "description", "Solicitud no válida."), back_url=url_for("home")), 400
 
 @app.errorhandler(404)
 def page_not_found(error):

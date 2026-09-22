@@ -1,8 +1,10 @@
-12.7
+12.8
 
 Cambios de esta versión:
-- Home: reencuadre vertical de la foto del Coach más arriba en celular y PC, siguiendo la referencia visual indicada por el usuario. La referencia naranja no forma parte del diseño.
-- PWA: iconos del escudo con fondo transparente y forma circular, para que el icono de “Futbol” se vea redondo.
-- PWA: se mantiene el nombre “Futbol” y el modo standalone.
-- PWA: caché actualizado a v2 para forzar la carga de los nuevos iconos y estilos.
-- Se conservan todos los cambios y reglas incorporados en la versión 12.6.
+- Refuerzo de sesiones: cookies Secure, HttpOnly y SameSite=Lax, con nombre de sesión propio.
+- Protección CSRF para todas las solicitudes POST mediante token de sesión.
+- Límite de intentos fallidos de acceso para Coach y alumnos: 8 intentos por IP en 15 minutos.
+- Cabeceras de seguridad: CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP y HSTS cuando la conexión es HTTPS.
+- Las pantallas autenticadas se sirven con Cache-Control: no-store.
+- El service worker ya no almacena páginas HTML ni pantallas autenticadas; solo recursos estáticos.
+- Se conserva toda la lógica funcional de la versión 12.7.

@@ -1,4 +1,4 @@
-# JC Fútbol Coach — versión 12.3
+# JC Fútbol Coach — versión 12.8
 
 Base real Flask + PostgreSQL/Supabase para desplegar en GitHub/Render.
 
@@ -56,3 +56,16 @@ No colocar estas credenciales dentro del código ni subir un archivo `.env` a Gi
 - Ajustada la portada: en móvil la foto aprobada queda ligeramente más arriba; en pantallas grandes la foto queda visualmente a la izquierda y la información/accesos a la derecha.
 - La foto utilizada sigue siendo únicamente la aprobada: polo blanco y estadio de fondo.
 - Revisión técnica realizada: compilación Python, sintaxis Jinja, sintaxis JavaScript, archivos esenciales y prueba de integridad del ZIP.
+
+
+## Seguridad — versión 12.8
+- `SECRET_KEY` debe estar configurada en Render y no debe publicarse en GitHub.
+- Las sesiones usan cookies `Secure`, `HttpOnly` y `SameSite=Lax`.
+- Los formularios POST incluyen protección CSRF.
+- El acceso de Coach y alumnos incorpora limitación de intentos fallidos (8 por IP en 15 minutos).
+- Se agregan cabeceras de seguridad y `no-store` para pantallas autenticadas.
+- El service worker no almacena HTML ni páginas con datos personales.
+- Las contraseñas continúan almacenándose con hash mediante Werkzeug.
+- Las consultas SQL continúan usando parámetros.
+
+Esta actualización es un refuerzo de seguridad a nivel de aplicación; no sustituye una auditoría profesional de infraestructura, Supabase/PostgreSQL, cuenta de Render, GitHub o dispositivos de los usuarios.
