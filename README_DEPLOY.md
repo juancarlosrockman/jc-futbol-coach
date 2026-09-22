@@ -1,71 +1,9 @@
-# JC Fútbol Coach — versión 12.8
+JC Fútbol Coach — v12.9
 
-Base real Flask + PostgreSQL/Supabase para desplegar en GitHub/Render.
+Base: v12.8 de seguridad.
 
-## Estructura
-- `app.py` — aplicación y rutas.
-- `templates/` — interfaz pública, alumno y Coach.
-- `static/logo.jpg` — logo.
-- `static/jc_coach_photo.png` — foto del Coach usada en el panel.
-- `requirements.txt` — dependencias.
-- `gunicorn.conf.py` — configuración de Gunicorn.
+Corrección exclusiva de la portada móvil. Se conserva la portada fija, sin desplazamiento vertical, como en la referencia anterior. Para pantallas de menor altura se compactan únicamente los elementos visuales para mantener visibles los botones “¿Eres nuevo?” y “Alumno actual”.
 
-## Render
-**Build Command**
-```
-pip install -r requirements.txt
-```
+No cambia la lógica de negocio, agenda, login, pagos, reprogramaciones ni demás funciones.
 
-**Start Command**
-```
-gunicorn app:app
-```
-
-## Variables de entorno
-- `DATABASE_URL` — cadena de conexión PostgreSQL de Supabase.
-- `SECRET_KEY` — clave secreta larga y aleatoria.
-- `COACH_USER` — usuario privado del Coach.
-- `COACH_PASSWORD` — contraseña privada del Coach.
-
-No colocar estas credenciales dentro del código ni subir un archivo `.env` a GitHub.
-
-## Flujo de trabajo
-1. Descargar el ZIP.
-2. Descomprimirlo.
-3. Subir/reemplazar los archivos del repositorio de GitHub manteniendo `app.py`, `templates/`, `static/`, `requirements.txt` y `gunicorn.conf.py`.
-4. Render detectará el cambio y hará un nuevo deploy.
-5. Verificar primero el login del Coach y luego el login de un alumno antes de registrar datos reales.
-
-## Cambios de esta versión
-- Corregida la lectura del estado `is_full` de la agenda.
-- Corregido el monto visual del paquete de 8 clases a S/600.
-- El alumno actual ya no entra en la lista de espera destinada a nuevos alumnos; cuando no encuentra horario, se le deriva a coordinación por WhatsApp.
-- El acceso del Coach está disponible desde el menú público; la ruta privada se conserva.
-- Corregida la edición de clases para evitar mover una clase sobre otra actividad ocupada, salvo clases que pertenezcan al mismo grupo.
-- Se incorpora la foto aprobada del Coach (polo blanco, estadio de fondo) en la portada y el panel.
-- Se conserva la lógica de Supabase/PostgreSQL, cuentas de padres, múltiples hijos, pagos, clases recurrentes, disponibilidad, reprogramación y avisos.
-
-- Integración visual del mockup sobre la base funcional, sin sustituir la lógica de agenda, pagos, reprogramación ni lista de espera.
-- Corregida la estructura HTML del bloque de estilos para evitar estilos anidados inválidos.
-- Portada alineada con el mockup aprobado: “Movimiento · Coordinación · Fundamentos”, “En Lima”, “Parques o domicilio”, “Coach Juan Carlos” y “ESTUDIOS FPF”.
-
-## Revisión 12.3
-- Se mantiene la aplicación real Flask/PostgreSQL como base; no se reemplaza por el mockup HTML.
-- Si todavía no existen zonas configuradas por el Coach, el flujo de nuevo alumno ofrece “A coordinar con el Coach” para evitar un bloqueo. Cuando existan zonas publicadas, se muestran las zonas configuradas.
-- Cuando el turno está marcado como agenda llena, el flujo del nuevo alumno se detiene en “AGENDA LLENA” y no permite avanzar a datos/confirmación; la lista de espera queda como alternativa.
-- Ajustada la portada: en móvil la foto aprobada queda ligeramente más arriba; en pantallas grandes la foto queda visualmente a la izquierda y la información/accesos a la derecha.
-- La foto utilizada sigue siendo únicamente la aprobada: polo blanco y estadio de fondo.
-- Revisión técnica realizada: compilación Python, sintaxis Jinja, sintaxis JavaScript, archivos esenciales y prueba de integridad del ZIP.
-
-
-## Seguridad — versión 12.8
-- `SECRET_KEY` debe estar configurada en Render y no debe publicarse en GitHub.
-- Las sesiones usan cookies `Secure`, `HttpOnly` y `SameSite=Lax`.
-- Los formularios POST incluyen protección CSRF.
-- El acceso de Coach y alumnos incorpora limitación de intentos fallidos (8 por IP en 15 minutos).
-- Se agregan cabeceras de seguridad y `no-store` para pantallas autenticadas.
-- El service worker no almacena HTML ni páginas con datos personales.
-- Las contraseñas continúan almacenándose con hash mediante Werkzeug.
-- Las consultas SQL continúan usando parámetros.
-
-Esta actualización es un refuerzo de seguridad a nivel de aplicación; no sustituye una auditoría profesional de infraestructura, Supabase/PostgreSQL, cuenta de Render, GitHub o dispositivos de los usuarios.
+Render: mantener las variables de entorno existentes, incluida SECRET_KEY. No reemplazar DATABASE_URL.

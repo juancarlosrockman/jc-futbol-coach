@@ -1,8 +1,7 @@
 12.9
 
-Cambios de esta versión:
-- Corrección de la portada móvil: el botón “Alumno actual” ya no queda cortado en pantallas de menor altura.
-- La portada ahora permite desplazamiento vertical como respaldo, sin bloquear el contenido.
-- Ajuste responsive de tamaños y espacios para que las dos opciones principales queden visibles con mayor consistencia.
-- Se conserva la seguridad incorporada en la versión 12.8.
-- No se modifica ninguna regla de negocio, agenda, precios, login ni flujo de alumnos.
+Corrección de portada móvil:
+- Se recupera el comportamiento anterior: portada fija y sin scroll vertical.
+- En pantallas de menor altura se compactan proporcionalmente logo, textos, características y botones para que “¿Eres nuevo?” y “Alumno actual” queden visibles dentro de la pantalla.
+- No se modifica ninguna regla de negocio ni ninguna función de la versión 12.8.
+- Se conserva toda la protección de seguridad de la versión 12.8.
