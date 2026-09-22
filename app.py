@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, Response
 import os
 import uuid
 import re
@@ -125,6 +125,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_date TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_time TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS session_group_id TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
@@ -323,7 +324,7 @@ def automatic_recovery_slots(c, student_id=None, today=None, horizon_days=45):
 def reschedule_slots(c, current, today):
     """Return public and automatic recovery slots for an existing student."""
     today = today if isinstance(today, date) else date.fromisoformat(str(today))
-    horizon = today + timedelta(days=45)
+    horizon = today + timedelta(days=90)
     zone = (current["student_zone"] or "").strip()
     slots = []
     seen = set()
@@ -419,6 +420,16 @@ def globals():
         "display_time": display_time,
         "class_status_label": class_status_label,
     }
+
+
+@app.route("/manifest.webmanifest")
+def manifest():
+    return send_from_directory(app.static_folder, "manifest.webmanifest", mimetype="application/manifest+json")
+
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
 
 
 @app.route("/")
@@ -1180,17 +1191,29 @@ def reschedule(class_id):
     if current["status"] != "postponed" and now >= original_dt-timedelta(hours=2):
         c.close(); return redirect(url_for("contacto_whatsapp",mensaje="Hola, Coach Juan Carlos. Tengo una emergencia y necesito coordinar una reprogramación de clase."))
     today=now.date()
+    # La primera reprogramación del padre se ofrece para el siguiente mes.
+    # Desde la segunda, la recuperación queda dentro del mismo mes de la clase.
+    reschedule_count = int(current.get("parent_reschedule_count") or 0)
+    target_month = None
+    if reschedule_count == 0:
+        base = date.fromisoformat(current["date"])
+        year = base.year + (1 if base.month == 12 else 0)
+        month = 1 if base.month == 12 else base.month + 1
+        target_month = f"{year:04d}-{month:02d}"
+    else:
+        target_month = current["date"][:7]
+
     if request.method=="POST":
         new_date=request.form.get("date","").strip(); new_time=request.form.get("time","").strip(); zone=(current["student_zone"] or "").strip()
         try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
         except (ValueError,IndexError): c.close(); flash("La fecha seleccionada no es válida."); return redirect(url_for("reschedule",class_id=class_id))
         if selected<today: c.close(); flash("La nueva fecha no puede ser anterior a hoy."); return redirect(url_for("reschedule",class_id=class_id))
-        available_slots=reschedule_slots(c,current,today)
+        available_slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
         allowed=any(x["date"]==new_date and x["time"]==new_time for x in available_slots)
         occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
         if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
         old_date=current["date"]; old_time=current["time"]
-        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',parent_reschedule_count=COALESCE(parent_reschedule_count,0)+1,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
         c.execute("""INSERT INTO coach_notifications(kind,class_id,student_id,title,message)
             VALUES(%s,%s,%s,%s,%s)""", (
                 "reschedule", class_id, current["student_id"], "Nueva reprogramación",
@@ -1199,8 +1222,8 @@ def reschedule(class_id):
         c.commit(); c.close()
         message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nClase anterior: {display_date(old_date)} · {display_time(old_time)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
         return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
-    slots=reschedule_slots(c,current,today)
-    c.close(); return render_template("reschedule.html",current=current,slots=slots)
+    slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
+    c.close(); return render_template("reschedule.html",current=current,slots=slots,reschedule_count=reschedule_count,target_month=target_month)
 
 
 
