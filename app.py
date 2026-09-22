@@ -442,6 +442,7 @@ def nuevo():
     c = db()
     if request.method == "POST":
         parent_name = request.form.get("parent_name", "").strip()
+        registrant_type = request.form.get("registrant_type", "parent").strip()
         whatsapp = request.form.get("whatsapp", "").strip()
         student_name = request.form.get("student_name", "").strip()
         age = request.form.get("age", "").strip()
@@ -477,9 +478,12 @@ def nuevo():
             schedule_day, schedule_time = "Lunes a viernes", "Consultar disponibilidad"
         else:
             c.close(); flash("Selecciona un horario."); return redirect(url_for("nuevo"))
+        registrant_label = "Alumno" if registrant_type == "student" else "Padre/madre o apoderado"
+        if registrant_type == "student":
+            student_name = parent_name
         message = (
             "⚽ Hola, Coach Juan Carlos. Quiero solicitar un entrenamiento de fútbol.\n\n"
-            f"Padre/madre: {parent_name}\nWhatsApp: {whatsapp}\nAlumno: {student_name}\nEdad: {age}\n"
+            f"{registrant_label}: {parent_name}\nWhatsApp: {whatsapp}\nAlumno: {student_name}\nEdad: {age}\n"
             f"Zona: {zone}\nModalidad: {mode}\nParque o dirección: {place}\n"
             f"Turno preferido: {turn}\nHorario de interés: {schedule_day} · {display_time(schedule_time) if schedule_time != "Consultar disponibilidad" else schedule_time}\nFotos/videos: {photo_consent or 'Por coordinar'}"
         )
