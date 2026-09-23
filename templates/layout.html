@@ -51,18 +51,6 @@ body{background:#f5f8f6;color:var(--ink)}
 .home-page .hero-logo{margin-left:0;margin-right:auto}
 .home-page .hero-kicker,.home-page .hero-sub,.home-page .hero-coach-name,.home-page .hero-credential{text-align:left}
 }
-
-/* Pantallas móviles cortas: mantener la portada completa, sin introducir scroll. */
-@media(max-height:780px) and (max-width:699px){
-.home-page .hero-content{padding-bottom:30px}
-.home-page .hero-logo{width:82px;height:82px;margin-bottom:13px}
-.home-page .hero-kicker{font-size:27px;margin-bottom:7px}
-.home-page .hero-sub{font-size:13px;margin-bottom:10px}
-.home-page .feature-row{margin-bottom:10px}
-.home-page .hero-coach-name{font-size:20px}
-.home-page .hero-credential{margin-bottom:9px}
-.home-page .hero-btn{min-height:51px;padding:8px 13px;margin:5px 0}
-}
 @media(max-width:380px){.home-page .hero-kicker{font-size:26px}.home-page .hero-logo{width:78px;height:78px;margin-bottom:13px}.home-page .hero-content{padding:0 17px 14px}.home-page .feature{font-size:9px}}
 </style></head>
 <body class="{% if request.endpoint=='home' %}home-page{% endif %}">
