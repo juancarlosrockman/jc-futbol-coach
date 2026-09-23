@@ -1,7 +1,16 @@
 12.9
 
-Corrección de portada móvil:
-- Se recupera el comportamiento anterior: portada fija y sin scroll vertical.
-- En pantallas de menor altura se compactan proporcionalmente logo, textos, características y botones para que “¿Eres nuevo?” y “Alumno actual” queden visibles dentro de la pantalla.
-- No se modifica ninguna regla de negocio ni ninguna función de la versión 12.8.
-- Se conserva toda la protección de seguridad de la versión 12.8.
+Base visual y funcional: versión 12.7 (última versión comprobada por el usuario antes del refuerzo de seguridad).
+
+Cambios de esta versión:
+- Se recupera íntegramente la portada y el comportamiento visual de la versión 12.7.
+- No se añade scroll a la portada ni se compactan sus elementos.
+- Se mantiene la seguridad incorporada en la versión 12.8:
+  - SECRET_KEY obligatoria y estable.
+  - Cookies Secure, HttpOnly y SameSite=Lax.
+  - Protección CSRF para solicitudes POST.
+  - Límite de intentos fallidos de acceso.
+  - Cabeceras de seguridad.
+  - No-store para pantallas autenticadas.
+  - Service worker sin caché de HTML ni páginas con datos personales.
+- No se modifican las reglas de negocio ni los flujos existentes.
