@@ -1,16 +1,8 @@
-12.9
+JC Fútbol Coach — v12.11
 
-Base visual y funcional: versión 12.7 (última versión comprobada por el usuario antes del refuerzo de seguridad).
-
-Cambios de esta versión:
-- Se recupera íntegramente la portada y el comportamiento visual de la versión 12.7.
-- No se añade scroll a la portada ni se compactan sus elementos.
-- Se mantiene la seguridad incorporada en la versión 12.8:
-  - SECRET_KEY obligatoria y estable.
-  - Cookies Secure, HttpOnly y SameSite=Lax.
-  - Protección CSRF para solicitudes POST.
-  - Límite de intentos fallidos de acceso.
-  - Cabeceras de seguridad.
-  - No-store para pantallas autenticadas.
-  - Service worker sin caché de HTML ni páginas con datos personales.
-- No se modifican las reglas de negocio ni los flujos existentes.
+- En “Clases de hoy”, el Coach ve la última anotación de trabajo realizada del alumno y puede registrar el trabajo de la clase directamente desde esa misma tarjeta.
+- Las anotaciones se conservan por clase y son visibles al padre/madre en el historial como trabajo realizado.
+- La portada móvil mantiene el comportamiento sin scroll y agrega un ajuste específico para pantallas cortas para que ambos accesos queden visibles.
+- Se corrige el centrado visual del menú del panel del padre.
+- Se evita el doble envío accidental en los formularios de login y se muestra feedback inmediato al pulsar Ingresar.
+- Se mantiene la seguridad incorporada en v12.8 y las reglas de negocio existentes.

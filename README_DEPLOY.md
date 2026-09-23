@@ -1,18 +1,15 @@
-# JC Fútbol Coach — versión 12.9
+# JC Fútbol Coach v12.11
 
-Base visual y funcional: versión 12.7, que era la versión comprobada antes del refuerzo de seguridad.
+Base: v12.10 / seguridad v12.8.
 
-## Seguridad
-- `SECRET_KEY` debe estar configurada en Render y no debe publicarse en GitHub.
-- Las sesiones usan cookies `Secure`, `HttpOnly` y `SameSite=Lax`.
-- Los formularios POST incluyen protección CSRF.
-- El acceso de Coach y alumnos incorpora limitación de intentos fallidos (8 por IP en 15 minutos).
-- Se agregan cabeceras de seguridad y `no-store` para pantallas autenticadas.
-- El service worker no almacena HTML ni páginas con datos personales; solo recursos estáticos.
-- Las contraseñas continúan almacenándose con hash mediante Werkzeug.
-- Las consultas SQL continúan usando parámetros.
+Cambios:
+- “Clases de hoy”: muestra la última clase realizada con anotación y permite escribir/guardar el trabajo de hoy.
+- El padre puede ver únicamente el trabajo ya realizado en el historial de su(s) hijo(s).
+- Portada móvil: sin scroll; ajuste responsive para pantallas cortas para mantener visibles los dos accesos principales.
+- Menú del padre: hamburguesa centrada.
+- Login: evita doble envío y muestra “Ingresando…” al primer toque.
+- No se modifican precios, agenda, pagos ni reglas de negocio.
 
-## Importante
-Esta versión recupera la portada y los archivos visuales de la versión 12.7 y aplica únicamente el refuerzo de seguridad de la 12.8. No incorpora las correcciones visuales intermedias de 12.9 que alteraban el comportamiento de la portada.
-
-Esta actualización es un refuerzo de seguridad a nivel de aplicación; no sustituye una auditoría profesional de infraestructura, Supabase/PostgreSQL, cuenta de Render, GitHub o dispositivos de los usuarios.
+Render:
+- Mantener DATABASE_URL y SECRET_KEY existentes.
+- No requiere migración manual: work_notes ya se crea con init_db().

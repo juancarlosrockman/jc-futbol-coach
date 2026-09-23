@@ -143,6 +143,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_time TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS session_group_id TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
@@ -679,6 +680,18 @@ def dashboard():
     today_classes = c.execute("""SELECT classes.*,students.student_name FROM classes
         LEFT JOIN students ON students.id=classes.student_id WHERE classes.date=%s
         ORDER BY classes.time""", (today,)).fetchall()
+    # Para cada clase de hoy, mostrar la última anotación de trabajo realizada
+    # de ese mismo alumno. Esto sirve como referencia antes de iniciar la clase.
+    today_with_last_work = []
+    for x in today_classes:
+        last_work = c.execute("""SELECT date,time,work_notes FROM classes
+            WHERE student_id=%s AND status='attended' AND work_notes IS NOT NULL
+              AND BTRIM(work_notes)<>'' AND date < %s
+            ORDER BY date DESC,time DESC,id DESC LIMIT 1""", (x["student_id"], today)).fetchone()
+        item = dict(x)
+        item["last_work"] = last_work
+        today_with_last_work.append(item)
+    today_classes = today_with_last_work
     notifications = c.execute("""SELECT n.*, s.student_name
         FROM coach_notifications n
         LEFT JOIN students s ON s.id=n.student_id
@@ -954,6 +967,7 @@ def student_detail(sid):
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
     classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC", (sid,)).fetchall()
     payments = c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC", (sid,)).fetchall()
+    last_work = c.execute("SELECT date,time,work_notes FROM classes WHERE student_id=%s AND status='attended' AND work_notes IS NOT NULL AND BTRIM(work_notes)<>'' ORDER BY date DESC,time DESC,id DESC LIMIT 1", (sid,)).fetchone()
     active_classes=[x for x in classes if x["status"]!='cancelled']
     summary={
         "scheduled": len(active_classes),
@@ -967,7 +981,7 @@ def student_detail(sid):
             assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
             attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
             packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
-    c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages, summary=summary)
+    c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages, summary=summary, last_work=last_work)
 
 
 @app.route("/entrenador/clase/<int:class_id>/editar", methods=["GET", "POST"])
@@ -1028,6 +1042,23 @@ def update_class_status(class_id):
         if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
         sync_payment_status(c, row["student_id"])
     c.commit(); c.close(); flash("Clase anulada." if status=="cancelled" else "Estado actualizado."); return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/entrenador/clase/<int:class_id>/trabajo", methods=["POST"])
+@coach_required
+def save_class_work(class_id):
+    work_notes = request.form.get("work_notes", "").strip()
+    if len(work_notes) > 1000:
+        flash("La anotación es demasiado larga. Puedes usar hasta 1000 caracteres.")
+        return redirect(request.referrer or url_for("dashboard"))
+    c = db()
+    row = c.execute("SELECT id, student_id FROM classes WHERE id=%s", (class_id,)).fetchone()
+    if not row:
+        c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    c.execute("UPDATE classes SET work_notes=%s WHERE id=%s", (work_notes or None, class_id))
+    c.commit(); c.close()
+    flash("Trabajo de la clase guardado.")
+    return redirect(request.referrer or url_for("student_detail", sid=row["student_id"]))
 
 
 @app.route("/entrenador/clase/<int:class_id>/eliminar", methods=["POST"])
@@ -1217,7 +1248,7 @@ def parent_home():
     for s in children:
         upcoming=c.execute("""SELECT * FROM classes WHERE student_id=%s AND date>=%s
             AND status IN ('scheduled','rescheduled','postponed') ORDER BY date,time LIMIT 60""", (s["id"],today_iso)).fetchall()
-        history=c.execute("""SELECT * FROM classes WHERE student_id=%s AND date<%s
+        history=c.execute("""SELECT * FROM classes WHERE student_id=%s AND date<=%s
             AND status<>'cancelled' ORDER BY date DESC,time DESC LIMIT 100""", (s["id"],today_iso)).fetchall()
         payments_rows=c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC", (s["id"],)).fetchall()
         current_month=today.strftime("%Y-%m")
@@ -1318,12 +1349,41 @@ def reschedule(class_id):
     else:
         target_month = current["date"][:7]
 
+    def first_month_recovery_fallback():
+        # En la primera reprogramación debe existir al menos una alternativa
+        # en el mes siguiente. Si la tabla de disponibilidad no devuelve
+        # opciones, usamos el mismo día/hora habitual de la clase y buscamos
+        # la primera fecha libre de ese patrón dentro del mes siguiente.
+        if reschedule_count != 0:
+            return []
+        try:
+            original_date = date.fromisoformat(current["date"])
+            original_time = current["time"]
+            weekday = original_date.weekday()
+            year, month = map(int, target_month.split("-"))
+            first_day = date(year, month, 1)
+            d = first_day + timedelta(days=(weekday - first_day.weekday()) % 7)
+            while d.month == month:
+                occupied = c.execute(
+                    "SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",
+                    (d.isoformat(), original_time, class_id)
+                ).fetchone()
+                if not occupied:
+                    return [{"date":d.isoformat(),"day":DAYS[d.weekday()],"time":original_time,
+                             "zone":(current["student_zone"] or "").strip(),"turn":turn_for_time(original_time),"kind":"fallback"}]
+                d += timedelta(days=7)
+        except Exception:
+            return []
+        return []
+
     if request.method=="POST":
         new_date=request.form.get("date","").strip(); new_time=request.form.get("time","").strip(); zone=(current["student_zone"] or "").strip()
         try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
         except (ValueError,IndexError): c.close(); flash("La fecha seleccionada no es válida."); return redirect(url_for("reschedule",class_id=class_id))
         if selected<today: c.close(); flash("La nueva fecha no puede ser anterior a hoy."); return redirect(url_for("reschedule",class_id=class_id))
         available_slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
+        if not available_slots:
+            available_slots=first_month_recovery_fallback()
         allowed=any(x["date"]==new_date and x["time"]==new_time for x in available_slots)
         occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
         if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
@@ -1338,6 +1398,8 @@ def reschedule(class_id):
         message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nClase anterior: {display_date(old_date)} · {display_time(old_time)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
         return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
     slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
+    if not slots:
+        slots=first_month_recovery_fallback()
     c.close(); return render_template("reschedule.html",current=current,slots=slots,reschedule_count=reschedule_count,target_month=target_month)
 
 
