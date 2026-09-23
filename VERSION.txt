@@ -1,8 +1,1 @@
-JC Fútbol Coach — v12.11
-
-- En “Clases de hoy”, el Coach ve la última anotación de trabajo realizada del alumno y puede registrar el trabajo de la clase directamente desde esa misma tarjeta.
-- Las anotaciones se conservan por clase y son visibles al padre/madre en el historial como trabajo realizado.
-- La portada móvil mantiene el comportamiento sin scroll y agrega un ajuste específico para pantallas cortas para que ambos accesos queden visibles.
-- Se corrige el centrado visual del menú del panel del padre.
-- Se evita el doble envío accidental en los formularios de login y se muestra feedback inmediato al pulsar Ingresar.
-- Se mantiene la seguridad incorporada en v12.8 y las reglas de negocio existentes.
+JCFC_APP_FINAL_12_12
