@@ -2,7 +2,7 @@
 {% block content %}
 <div class="parent-head">
   <div class="row">
-    <button class="icon-btn" aria-label="Abrir menú" onclick="document.getElementById('drawer').classList.add('open')">☰</button>
+    <button class="icon-btn parent-menu-btn" aria-label="Abrir menú" onclick="document.getElementById('drawer').classList.add('open')"><span class="hamburger-lines"><i></i><i></i><i></i></span></button>
     <img class="app-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman">
     <div class="row" style="gap:7px"><span style="font-size:19px">♧</span><span class="avatar">{{children[0].student.parent_name[:1]|upper}}</span></div>
   </div>
@@ -61,7 +61,7 @@
       {% else %}<p class="muted">No tienes próximas clases registradas.</p>{% endfor %}
     </div>
     <div class="tab-panel" data-tab="history" style="display:none">
-      {% for x in child.history %}<div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_date(x.date)}} · {{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span></div><span class="pill {% if x.status=='attended' %}ok{% elif x.status=='cancelled' %}danger{% endif %}">{{class_status_label(x.status)}}</span></div>{% else %}<p class="muted">Aún no hay historial.</p>{% endfor %}
+      {% for x in child.history %}<div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_date(x.date)}} · {{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span>{% if x.status=='attended' and x.work_notes %}<div class="notice" style="margin-top:8px;padding:9px 11px"><b>Trabajo realizado</b><br>{{x.work_notes}}</div>{% endif %}</div><span class="pill {% if x.status=='attended' %}ok{% elif x.status=='cancelled' %}danger{% endif %}">{{class_status_label(x.status)}}</span></div>{% else %}<p class="muted">Aún no hay historial.</p>{% endfor %}
     </div>
   </div>
 
