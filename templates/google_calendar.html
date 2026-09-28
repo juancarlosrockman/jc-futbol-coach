@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card" style="max-width:650px;margin:24px auto;padding:22px">
+<h2>Google Calendar</h2>
+<p>Conecta tu cuenta de Google para sincronizar las clases con un calendario independiente llamado <strong>{{calendar_name}}</strong>. Tu calendario personal no se modifica.</p>
+{% if connected %}<p style="color:green;font-weight:700">Google Calendar está conectado.</p><p>Las clases nuevas y las modificaciones se sincronizarán cuando la integración esté activa.</p><form method="post" action="{{url_for('google_calendar_disconnect')}}"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><button class="btn" type="submit">Desconectar</button></form>
+{% else %}<p>Estado: aún no conectado.</p>{% if configured %}<a class="btn" href="{{url_for('google_calendar_connect')}}">Conectar con Google</a>{% else %}<p>Falta configurar las variables OAuth en Render: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REDIRECT_URI.</p>{% endif %}{% endif %}
+<p style="margin-top:20px;font-size:13px;color:#666">La autorización se realiza en Google. No compartas tu contraseña con nadie.</p>
+</div>
+{% endblock %}

@@ -81,7 +81,7 @@ body{background:#f5f8f6;color:var(--ink)}
 {% if session.get('role')=='parent' %}
 <nav class="nav"><a class="active" href="{{url_for('parent_home')}}">⌂<br>Inicio</a><a href="{{url_for('parent_home')}}#clases">▣<br>Clases</a><a href="{{url_for('parent_home')}}#pagos">▤<br>Pagos</a><a href="{{url_for('parent_home')}}#perfil">♙<br>Perfil</a></nav>
 {% elif session.get('role')=='coach' %}
-<nav class="nav"><a href="{{url_for('dashboard')}}">⌂<br>Inicio</a><a href="{{url_for('new_class')}}">▣<br>Agenda</a><a href="{{url_for('students')}}">♟<br>Alumnos</a><a href="{{url_for('availability')}}">◷<br>Dispon.</a><a href="{{url_for('payments')}}">▤<br>Pagos</a></nav>
+<nav class="nav"><a href="{{url_for('dashboard')}}">⌂<br>Inicio</a><a href="{{url_for('new_class')}}">▣<br>Agenda</a><a href="{{url_for('students')}}">♟<br>Alumnos</a><a href="{{url_for('availability')}}">◷<br>Dispon.</a><a href="{{url_for('payments')}}">▤<br>Pagos</a><a href="{{url_for('google_calendar_settings_page')}}">▦<br>Google</a></nav>
 {% endif %}
 <script>
 let deferredInstallPrompt=null;

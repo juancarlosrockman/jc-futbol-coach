@@ -7,6 +7,22 @@
     <div class="row" style="gap:7px"><span style="font-size:19px">♧</span><span class="avatar">{{children[0].student.parent_name[:1]|upper}}</span></div>
   </div>
 </div>
+{% if reminders %}
+<div class="card" style="border:2px solid #f4c542;background:#fff9df;margin:12px 0;padding:14px">
+  <h3 style="margin:0 0 8px">⏰ Recordatorio de clase</h3>
+  {% for reminder in reminders %}
+  <div style="padding:10px 0;border-top:1px solid #eadca8">
+    <b>{{reminder.student_name}}</b><br>
+    Hoy a las {{reminder.time}} · {{reminder.place}}<br>
+    <small>Faltan aproximadamente {{reminder.minutes}} min.</small>
+    <form method="post" action="{{url_for('parent_reminder_seen',class_id=reminder.class_id)}}" style="margin-top:8px">
+      <button class="btn" type="submit">Entendido</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="parent-greeting">
   <h1>Hola, {{children[0].student.parent_name.split()[0]}} 👋</h1>
   <p>Aquí puedes ver la información de tus clases.</p>
