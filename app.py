@@ -9,6 +9,9 @@ from functools import wraps
 from secrets import token_hex
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg
+import requests
+import base64
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
 
 app = Flask(__name__)
@@ -50,6 +53,141 @@ def db():
     if not DATABASE_URL:
         raise RuntimeError("Falta la variable de entorno DATABASE_URL.")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+
+GOOGLE_CALENDAR_NAME = "JC Fútbol Coach – Clases"
+GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar"
+
+def _fernet():
+    # Derive a stable encryption key from the app's existing secret; no extra secret required.
+    digest = hashlib.sha256(app.secret_key.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+def _token_encrypt(value):
+    return _fernet().encrypt(value.encode("utf-8")).decode("ascii") if value else None
+
+def _token_decrypt(value):
+    if not value:
+        return None
+    try:
+        return _fernet().decrypt(value.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError):
+        return None
+
+def google_oauth_configured():
+    return all(os.environ.get(k, "").strip() for k in ("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REDIRECT_URI"))
+
+def _google_setting(c, coach_user_id):
+    return c.execute("SELECT * FROM google_calendar_settings WHERE coach_user_id=%s", (coach_user_id,)).fetchone()
+
+def _google_refresh_access(c, setting):
+    refresh = _token_decrypt(setting.get("refresh_token"))
+    if not refresh:
+        raise RuntimeError("Google Calendar no está autorizado. Conecta la cuenta desde la aplicación.")
+    response = requests.post("https://oauth2.googleapis.com/token", data={
+        "client_id": os.environ["GOOGLE_CLIENT_ID"],
+        "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+        "refresh_token": refresh,
+        "grant_type": "refresh_token",
+    }, timeout=20)
+    if response.status_code >= 400:
+        raise RuntimeError("Google no pudo renovar la autorización. Desconecta y vuelve a conectar Google Calendar.")
+    payload = response.json()
+    expiry = datetime.now(PERU_TZ).replace(tzinfo=None) + timedelta(seconds=int(payload.get("expires_in",3600)))
+    c.execute("UPDATE google_calendar_settings SET access_token=%s,token_expiry=%s,updated_at=CURRENT_TIMESTAMP WHERE coach_user_id=%s",
+              (_token_encrypt(payload["access_token"]), expiry, setting["coach_user_id"]))
+    setting["access_token"] = _token_encrypt(payload["access_token"])
+    setting["token_expiry"] = expiry
+    return payload["access_token"]
+
+def _google_access_token(c, setting):
+    expiry = setting.get("token_expiry")
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=PERU_TZ)
+    if setting.get("access_token") and expiry and expiry > datetime.now(PERU_TZ) + timedelta(minutes=2):
+        return _token_decrypt(setting["access_token"])
+    return _google_refresh_access(c, setting)
+
+def _google_api(c, setting, method, path, **kwargs):
+    token = _google_access_token(c, setting)
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = "Bearer " + token
+    response = requests.request(method, "https://www.googleapis.com/calendar/v3" + path,
+                                headers=headers, timeout=25, **kwargs)
+    if response.status_code == 401:
+        token = _google_refresh_access(c, setting)
+        headers["Authorization"] = "Bearer " + token
+        response = requests.request(method, "https://www.googleapis.com/calendar/v3" + path,
+                                    headers=headers, timeout=25, **kwargs)
+    if response.status_code >= 400:
+        raise RuntimeError("Google Calendar respondió con error HTTP " + str(response.status_code))
+    return response.json() if response.content else {}
+
+def _ensure_google_calendar(c, setting):
+    if setting.get("calendar_id"):
+        return setting["calendar_id"]
+    calendar = _google_api(c, setting, "POST", "/calendars", json={
+        "summary": GOOGLE_CALENDAR_NAME, "timeZone": "America/Lima"
+    })
+    c.execute("UPDATE google_calendar_settings SET calendar_id=%s,updated_at=CURRENT_TIMESTAMP WHERE coach_user_id=%s",
+              (calendar["id"], setting["coach_user_id"]))
+    setting["calendar_id"] = calendar["id"]
+    return calendar["id"]
+
+def _calendar_event_payload(row):
+    start_dt = parse_iso_datetime(row["date"], row["time"])
+    # Default class duration 60 minutes; retain existing business logic and data.
+    end_dt = start_dt + timedelta(minutes=60)
+    student = row.get("student_name") or "Alumno"
+    place = row.get("place") or row.get("student_zone") or "Por confirmar"
+    mode = row.get("mode") or "Entrenamiento"
+    return {
+        "summary": f"JC Fútbol Coach – {student}",
+        "description": f"Entrenamiento personalizado\nAlumno: {student}\nModalidad: {mode}\nLugar: {place}\nID de clase JCFC: {row['id']}",
+        "location": place,
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": "America/Lima"},
+        "end": {"dateTime": end_dt.isoformat(), "timeZone": "America/Lima"},
+        "extendedProperties": {"private": {"jcfc_class_id": str(row["id"])}}
+    }
+
+def sync_class_to_google(class_id, delete=False):
+    """Best-effort sync. App scheduling remains usable if Google is temporarily unavailable."""
+    c = db()
+    try:
+        coach = c.execute("SELECT id FROM users WHERE role='coach' ORDER BY id LIMIT 1").fetchone()
+        if not coach:
+            return False
+        setting = _google_setting(c, coach["id"])
+        if not setting or not setting.get("refresh_token"):
+            return False
+        row = c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone
+            FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s""",(class_id,)).fetchone()
+        event_id = row.get("google_event_id") if row else None
+        calendar_id = setting.get("calendar_id") or _ensure_google_calendar(c, setting)
+        if delete or not row or row.get("status") == "cancelled":
+            if event_id:
+                try:
+                    _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}")
+                except RuntimeError as e:
+                    if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
+                        raise
+                c.execute("UPDATE classes SET google_event_id=NULL WHERE id=%s",(class_id,))
+        elif row.get("status") in ("scheduled","rescheduled","postponed"):
+            payload = _calendar_event_payload(row)
+            if event_id:
+                event = _google_api(c, setting, "PATCH", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}", json=payload)
+            else:
+                event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
+                c.execute("UPDATE classes SET google_event_id=%s WHERE id=%s",(event["id"],class_id))
+        c.commit()
+        return True
+    except Exception as exc:
+        c.rollback()
+        app.logger.warning("Google Calendar sync failed for class %s: %s", class_id, exc)
+        return False
+    finally:
+        c.close()
 
 
 def password_is_hashed(value):
@@ -119,6 +257,29 @@ def init_db():
         attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_endpoint_time ON login_attempts(ip,endpoint,attempted_at DESC)")
+    c.execute("""CREATE TABLE IF NOT EXISTS parent_class_reminders_seen(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id,class_id)
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        endpoint TEXT NOT NULL UNIQUE,
+        subscription_json TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS google_calendar_settings(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        coach_user_id INTEGER NOT NULL UNIQUE,
+        calendar_id TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expiry TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
     c.execute("""CREATE TABLE IF NOT EXISTS coach_notifications(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -144,6 +305,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS session_group_id TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
@@ -791,6 +953,7 @@ def new_student():
             created = save_class_groups(c, sid, tariff, request.form)
             payment_id = save_optional_payment(c, sid, request.form, created)
             c.commit()
+            created_for_sync = list(created)
         except ValueError as exc:
             c.rollback(); c.close()
             msg = ("El paquete seleccionado no existe o ya no tiene clases disponibles." if str(exc)=="package_invalid" else ("Agrega al menos una fecha y hora válidas." if str(exc)=="invalid_class" else ("Ese horario no está disponible para reprogramar." if str(exc) in ("occupied_class", "duplicate_class") else "Revisa los datos y el monto del pago.")))
@@ -1017,6 +1180,8 @@ def edit_class(class_id):
         c.execute("UPDATE classes SET date=%s,time=%s WHERE id=%s", (new_date, new_time, class_id))
         c.commit(); c.close()
         if old_date != new_date or old_time != new_time:
+            sync_class_to_google(class_id)
+        if old_date != new_date or old_time != new_time:
             flash(f"Clase corregida: {current['student_name']} · {display_date(new_date)} · {display_time(new_time)}.")
         else:
             flash("Clase guardada sin cambios de horario.")
@@ -1041,7 +1206,12 @@ def update_class_status(class_id):
         c.execute("UPDATE classes SET status=%s WHERE id=%s",(status,class_id))
         if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
         sync_payment_status(c, row["student_id"])
-    c.commit(); c.close(); flash("Clase anulada." if status=="cancelled" else "Estado actualizado."); return redirect(request.referrer or url_for("dashboard"))
+    c.commit(); c.close()
+    if status == "cancelled":
+        sync_class_to_google(class_id, delete=True)
+    elif status in ("scheduled","rescheduled","postponed"):
+        sync_class_to_google(class_id)
+    flash("Clase anulada." if status=="cancelled" else "Estado actualizado."); return redirect(request.referrer or url_for("dashboard"))
 
 
 @app.route("/entrenador/clase/<int:class_id>/trabajo", methods=["POST"])
@@ -1066,6 +1236,9 @@ def save_class_work(class_id):
 def delete_class(class_id):
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    c.close()
+    sync_class_to_google(class_id, delete=True)
+    c=db()
     c.execute("DELETE FROM classes WHERE id=%s",(class_id,)); c.commit(); c.close(); flash("Clase eliminada."); return redirect(request.referrer or url_for("dashboard"))
 
 
@@ -1091,7 +1264,10 @@ def new_class():
             flash(msg); return redirect(url_for("new_class",student=sid))
         except Exception:
             c.rollback(); c.close(); flash("No se pudieron registrar las clases. Revisa los datos antes de volver a intentarlo."); return redirect(url_for("new_class",student=sid))
-        c.close(); flash(f"Se registraron {len(created)} clase(s) correctamente."); return redirect(url_for("student_detail",sid=sid))
+        c.close()
+        for new_class_id in created_for_sync:
+            sync_class_to_google(new_class_id)
+        flash(f"Se registraron {len(created)} clase(s) correctamente."); return redirect(url_for("student_detail",sid=sid))
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall(); selected_id=request.args.get("student",type=int)
     selected=c.execute("SELECT * FROM students WHERE id=%s",(selected_id,)).fetchone() if selected_id else None
     zones=c.execute("SELECT DISTINCT zone FROM (SELECT zone FROM students WHERE zone<>'' UNION SELECT zone FROM availability WHERE active=TRUE AND zone<>'') z ORDER BY zone").fetchall()
@@ -1274,9 +1450,65 @@ def parent_home():
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
             "extra_count":extra_count, "reprogrammable_id":reprogrammable_id,
         })
-    c.close(); return render_template("parent.html", children=child_data)
+    # In-app reminders: within 2 hours before the class, per child/class,
+    # and persistently dismissed per parent account across devices.
+    now_local = datetime.now(PERU_TZ)
+    reminders = []
+    for item in child_data:
+        student = item["student"]
+        for cl in item["upcoming"]:
+            try:
+                start_local = datetime.strptime(f"{cl['date']} {cl['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=PERU_TZ)
+            except (ValueError, TypeError):
+                continue
+            delta = (start_local - now_local).total_seconds()
+            if 0 < delta <= 7200:
+                already_seen = c.execute("SELECT 1 FROM parent_class_reminders_seen WHERE user_id=%s AND class_id=%s", (user_id, cl["id"])).fetchone()
+                if not already_seen:
+                    reminders.append({"class_id": cl["id"], "student_id": student["id"], "student_name": student["student_name"], "date": cl["date"], "time": cl["time"], "place": cl.get("place") or student.get("place") or student.get("zone") or "Por confirmar", "minutes": max(1, int(delta // 60))})
+    c.close(); return render_template("parent.html", children=child_data, reminders=reminders)
 
 
+
+@app.route("/alumno/recordatorio/<int:class_id>/visto", methods=["POST"])
+def parent_reminder_seen(class_id):
+    if session.get("role") != "parent":
+        abort(401)
+    user_id = session["user_id"]
+    c = db()
+    owned = c.execute("""SELECT classes.id FROM classes JOIN students ON students.id=classes.student_id
+        WHERE classes.id=%s AND students.user_id=%s AND classes.status IN ('scheduled','rescheduled','postponed')""", (class_id,user_id)).fetchone()
+    if not owned:
+        c.close(); abort(404)
+    c.execute("INSERT INTO parent_class_reminders_seen(user_id,class_id) VALUES(%s,%s) ON CONFLICT(user_id,class_id) DO NOTHING", (user_id,class_id))
+    c.commit(); c.close()
+    return redirect(url_for("parent_home"))
+
+@app.route("/alumno/push/clave-publica")
+def parent_push_public_key():
+    if session.get("role") != "parent": return {"error":"unauthorized"},401
+    return {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", "")}
+
+@app.route("/alumno/push/suscribir", methods=["POST"])
+def parent_push_subscribe():
+    if session.get("role") != "parent": return {"error":"unauthorized"},401
+    payload = request.get_json(silent=True) or {}
+    endpoint = payload.get("endpoint")
+    if not endpoint or not isinstance(payload.get("keys"), dict): return {"error":"invalid subscription"},400
+    import json
+    c=db()
+    c.execute("""INSERT INTO push_subscriptions(user_id,endpoint,subscription_json) VALUES(%s,%s,%s)
+        ON CONFLICT(endpoint) DO UPDATE SET user_id=EXCLUDED.user_id,subscription_json=EXCLUDED.subscription_json""",(session["user_id"],endpoint,json.dumps(payload)))
+    c.commit(); c.close()
+    return {"ok":True}
+
+@app.route("/alumno/push/desuscribir", methods=["POST"])
+def parent_push_unsubscribe():
+    if session.get("role") != "parent": return {"error":"unauthorized"},401
+    payload=request.get_json(silent=True) or {}; endpoint=payload.get("endpoint")
+    if endpoint:
+        c=db(); c.execute("DELETE FROM push_subscriptions WHERE user_id=%s AND endpoint=%s",(session["user_id"],endpoint)); c.commit(); c.close()
+    return {"ok":True}
 
 @app.route("/alumno/solicitar", methods=["GET","POST"])
 def parent_request_class():
@@ -1395,6 +1627,7 @@ def reschedule(class_id):
                 f"{current['student_name']} cambió su clase de {display_date(old_date)} · {display_time(old_time)} a {display_date(new_date)} · {display_time(new_time)} · {zone or 'Zona por indicar'}."
             ))
         c.commit(); c.close()
+        sync_class_to_google(class_id)
         message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nClase anterior: {display_date(old_date)} · {display_time(old_time)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
         return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
     slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
@@ -1421,9 +1654,101 @@ def coach_reschedule(class_id):
         old_date,old_time=current["date"],current["time"]
         c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
         c.commit(); c.close()
+        sync_class_to_google(class_id)
         return redirect(url_for("student_detail",sid=current["student_id"]))
     slots=reschedule_slots(c,current,datetime.now(PERU_TZ).date()); c.close()
     return render_template("reschedule.html",current=current,slots=slots,coach_mode=True)
+
+
+@app.route("/entrenador/google-calendar")
+@coach_required
+def google_calendar_settings():
+    c=db()
+    setting=_google_setting(c,session["user_id"])
+    connected=bool(setting and setting.get("refresh_token"))
+    c.close()
+    return render_template("google_calendar.html",calendar_name=GOOGLE_CALENDAR_NAME,
+        connected=connected,configured=google_oauth_configured())
+
+@app.route("/entrenador/google-calendar/conectar")
+@coach_required
+def google_calendar_connect():
+    if not google_oauth_configured():
+        flash("Falta configurar GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REDIRECT_URI en Render.")
+        return redirect(url_for("google_calendar_settings"))
+    state=token_hex(24)
+    session["google_oauth_state"]=state
+    from urllib.parse import urlencode
+    params={"client_id":os.environ["GOOGLE_CLIENT_ID"],"redirect_uri":os.environ["GOOGLE_REDIRECT_URI"],
+        "response_type":"code","scope":GOOGLE_SCOPES,"access_type":"offline","prompt":"consent",
+        "include_granted_scopes":"true","state":state}
+    return redirect("https://accounts.google.com/o/oauth2/v2/auth?"+urlencode(params))
+
+@app.route("/oauth/google/callback")
+@coach_required
+def google_calendar_callback():
+    if request.args.get("error"):
+        flash("No se autorizó Google Calendar.")
+        return redirect(url_for("google_calendar_settings"))
+    state=request.args.get("state","")
+    if not state or state != session.pop("google_oauth_state",None):
+        abort(400,"Estado OAuth inválido.")
+    code=request.args.get("code")
+    if not code or not google_oauth_configured():
+        flash("No se pudo completar la autorización de Google.")
+        return redirect(url_for("google_calendar_settings"))
+    try:
+        token_response=requests.post("https://oauth2.googleapis.com/token",data={
+            "code":code,"client_id":os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret":os.environ["GOOGLE_CLIENT_SECRET"],
+            "redirect_uri":os.environ["GOOGLE_REDIRECT_URI"],"grant_type":"authorization_code"
+        },timeout=25)
+        token_response.raise_for_status()
+        tokens=token_response.json()
+        c=db()
+        existing=_google_setting(c,session["user_id"])
+        refresh=tokens.get("refresh_token") or (_token_decrypt(existing.get("refresh_token")) if existing else None)
+        if not refresh:
+            c.close()
+            flash("Google no devolvió permiso de actualización. Desconecta el acceso de la app en tu cuenta Google y vuelve a conectar.")
+            return redirect(url_for("google_calendar_settings"))
+        expiry=datetime.now(PERU_TZ).replace(tzinfo=None)+timedelta(seconds=int(tokens.get("expires_in",3600)))
+        c.execute("""INSERT INTO google_calendar_settings(coach_user_id,access_token,refresh_token,token_expiry)
+            VALUES(%s,%s,%s,%s) ON CONFLICT(coach_user_id) DO UPDATE SET
+            access_token=EXCLUDED.access_token,refresh_token=EXCLUDED.refresh_token,token_expiry=EXCLUDED.token_expiry,updated_at=CURRENT_TIMESTAMP""",
+            (session["user_id"],_token_encrypt(tokens.get("access_token")),_token_encrypt(refresh),expiry))
+        c.commit()
+        setting=_google_setting(c,session["user_id"])
+        _ensure_google_calendar(c,setting)
+        c.commit(); c.close()
+        # Backfill all active/future classes. This also initializes events for existing schedule.
+        c=db()
+        ids=c.execute("SELECT id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
+        c.close()
+        for item in ids:
+            sync_class_to_google(item["id"])
+        flash("Google Calendar conectado. Las clases programadas se sincronizarán.")
+    except Exception as exc:
+        app.logger.exception("Google OAuth callback failed: %s",exc)
+        flash("No se pudo conectar Google Calendar. Revisa las credenciales OAuth en Render.")
+    return redirect(url_for("google_calendar_settings"))
+
+@app.route("/entrenador/google-calendar/desconectar",methods=["POST"])
+@coach_required
+def google_calendar_disconnect():
+    c=db()
+    setting=_google_setting(c,session["user_id"])
+    if setting:
+        refresh=_token_decrypt(setting.get("refresh_token"))
+        if refresh:
+            try: requests.post("https://oauth2.googleapis.com/revoke",data={"token":refresh},timeout=10)
+            except Exception: pass
+        c.execute("DELETE FROM google_calendar_settings WHERE coach_user_id=%s",(session["user_id"],))
+        c.commit()
+    c.close()
+    flash("Google Calendar desconectado. Los eventos ya creados en Google no se eliminaron.")
+    return redirect(url_for("google_calendar_settings"))
+
 
 @app.route("/logout")
 def logout(): session.clear(); return redirect(url_for("home"))
