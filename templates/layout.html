@@ -73,6 +73,32 @@ body{background:#f5f8f6;color:var(--ink)}
 .home-page .hero-kicker,.home-page .hero-sub,.home-page .hero-coach-name,.home-page .hero-credential{text-align:left}
 }
 @media(max-width:380px){.home-page .hero-kicker{font-size:26px}.home-page .hero-logo{width:78px;height:78px;margin-bottom:13px}.home-page .hero-content{padding:0 17px 14px}.home-page .feature{font-size:9px}}
+
+/* v12.14.3: fix iOS reservation form checkbox layout and prevent narrow-screen overflow */
+.public-request-card,
+.public-request-card form,
+.public-request-card .wizard-panel,
+.public-request-card .notice { min-width:0; max-width:100%; }
+.public-request-card .notice { overflow-wrap:anywhere; word-break:normal; }
+.public-request-card label:has(input[type="checkbox"]) {
+  display:flex !important; align-items:flex-start !important; gap:10px !important;
+  width:100%; min-width:0; line-height:1.45; overflow-wrap:anywhere;
+}
+.public-request-card label input[type="checkbox"] {
+  appearance:auto; -webkit-appearance:checkbox;
+  display:block; width:20px !important; min-width:20px; max-width:20px;
+  height:20px; flex:0 0 20px; margin:4px 0 0 !important; padding:0;
+}
+.public-request-card label:has(input[type="checkbox"]) span { flex:1 1 auto; min-width:0; }
+.public-request-card .wizard-actions { min-width:0; }
+.public-request-card .wizard-actions > * { min-width:0; overflow-wrap:anywhere; }
+@media (max-width: 480px) {
+  .wrap { width:100%; max-width:100%; padding-left:12px; padding-right:12px; }
+  .public-request-card { padding:14px; }
+  .public-request-card .wizard-actions { gap:8px; }
+  .public-request-card .wizard-actions .btn { padding:12px 8px; white-space:normal; }
+}
+
 </style></head>
 <body class="{% if request.endpoint=='home' %}home-page{% endif %}">
 {% with messages=get_flashed_messages() %}{% for m in messages %}<div class="wrap" style="padding-bottom:0"><div class="flash">{{m}}</div></div>{% endfor %}{% endwith %}
