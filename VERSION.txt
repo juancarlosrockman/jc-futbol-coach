@@ -1,1 +1,1 @@
-JC Fútbol Coach v12.14
+JC Fútbol Coach v12.14.3 - iPhone checkbox responsive fix + Google OAuth hashlib fix
