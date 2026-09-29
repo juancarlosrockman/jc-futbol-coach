@@ -1,6 +1,16 @@
 {% extends "layout.html" %}{% block content %}
-<a class="back" href="{{url_for('parent_home')}}">← Volver</a>
+<a class="back" href="{{ url_for('student_detail', sid=current.student_id) if coach_mode else url_for('parent_home') }}">← {{ 'Volver a la ficha del alumno' if coach_mode else 'Volver' }}</a>
 <div class="card">
+  {% if coach_mode %}
+  <h1>Reprogramar clase</h1>
+  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Clase actual:</b> {{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Zona:</b> {{current.student_zone or 'Por indicar'}}</div>
+  <p class="muted">Como coach puedes elegir cualquier fecha y hora. Solo se bloquearán fechas pasadas y horarios ocupados por otra clase.</p>
+  <form method="post" style="margin-top:14px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="coach_date">Nueva fecha</label><input id="coach_date" type="date" name="date" min="{{ now_date }}" value="{{current.date}}" required>
+    <label for="coach_time">Nueva hora</label><input id="coach_time" type="time" name="time" value="{{current.time}}" required>
+    <button class="btn green" style="width:100%;margin-top:14px" type="submit">Guardar reprogramación</button>
+  </form>
+  {% else %}
   <div class="eyebrow">ALUMNO ACTUAL</div><h1>Reprogramar clase</h1>
   <div class="notice"><b>Clase actual</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or 'Lugar por indicar'}}</div>
   <div class="notice" style="margin-top:10px">
@@ -24,4 +34,5 @@
   <a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito coordinar la reprogramación de una clase.')}}">📲 Coordinar con Coach Juan Carlos</a>
   {% endif %}
 </div><script>function pick(d,t){document.getElementById('date').value=d;document.getElementById('time').value=t}</script>
+  {% endif %}
 {% endblock %}

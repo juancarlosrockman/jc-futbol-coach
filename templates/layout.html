@@ -106,7 +106,7 @@ body{background:#f5f8f6;color:var(--ink)}
 <div class="wrap {% if session.get('role')=='coach' %}wide{% endif %}">{% block content %}{% endblock %}</div>
 {% if session.get('role')=='parent' %}
 <nav class="nav"><a class="active" href="{{url_for('parent_home')}}">⌂<br>Inicio</a><a href="{{url_for('parent_home')}}#clases">▣<br>Clases</a><a href="{{url_for('parent_home')}}#pagos">▤<br>Pagos</a><a href="{{url_for('parent_home')}}#perfil">♙<br>Perfil</a></nav>
-{% elif session.get('role')=='coach' %}
+{% elif session.get('role')=='coach' and request.endpoint not in ('parent_login',) %}
 <nav class="nav"><a href="{{url_for('dashboard')}}">⌂<br>Inicio</a><a href="{{url_for('new_class')}}">▣<br>Agenda</a><a href="{{url_for('students')}}">♟<br>Alumnos</a><a href="{{url_for('availability')}}">◷<br>Dispon.</a><a href="{{url_for('payments')}}">▤<br>Pagos</a><a href="{{url_for('google_calendar_settings')}}">▦<br>Google</a></nav>
 {% endif %}
 <script>
