@@ -1647,18 +1647,33 @@ def coach_reschedule(class_id):
     if not current: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
     if request.method=="POST":
         new_date=request.form.get("date","").strip(); new_time=request.form.get("time","").strip()
-        try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
-        except (ValueError,IndexError): c.close(); flash("Fecha no válida."); return redirect(url_for("coach_reschedule",class_id=class_id))
-        slots=reschedule_slots(c,current,datetime.now(PERU_TZ).date())
-        if not any(x["date"]==new_date and x["time"]==new_time for x in slots):
-            c.close(); flash("Ese horario no está disponible para reprogramar."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        try:
+            selected=date.fromisoformat(new_date)
+            datetime.strptime(new_time, "%H:%M")
+        except (ValueError,TypeError):
+            c.close(); flash("La fecha u hora no son válidas."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        if selected < datetime.now(PERU_TZ).date():
+            c.close(); flash("No puedes reprogramar una clase a una fecha anterior a hoy."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        if selected.weekday() > 5:
+            c.close(); flash("No se pueden agendar clases los domingos."); return redirect(url_for("coach_reschedule",class_id=class_id))
+        # Coach has the same free date/time picker as Edit Class; only real conflicts block the save.
+        conflict=c.execute("""SELECT id,student_id,session_group_id FROM classes
+            WHERE date=%s AND time=%s AND id<>%s
+            AND status IN ('scheduled','rescheduled','postponed') LIMIT 1""",
+            (new_date,new_time,class_id)).fetchone()
+        if conflict:
+            same_group=bool(current.get("session_group_id") and conflict.get("session_group_id")==current.get("session_group_id"))
+            same_student=conflict["student_id"]==current["student_id"]
+            if not (same_group or same_student):
+                c.close(); flash("Ese horario ya está ocupado por otra clase."); return redirect(url_for("coach_reschedule",class_id=class_id))
         old_date,old_time=current["date"],current["time"]
         c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
         c.commit(); c.close()
         sync_class_to_google(class_id)
+        flash(f"Clase reprogramada para {display_date(new_date)} · {display_time(new_time)}.")
         return redirect(url_for("student_detail",sid=current["student_id"]))
-    slots=reschedule_slots(c,current,datetime.now(PERU_TZ).date()); c.close()
-    return render_template("reschedule.html",current=current,slots=slots,coach_mode=True)
+    c.close()
+    return render_template("reschedule.html",current=current,slots=[],coach_mode=True,now_date=datetime.now(PERU_TZ).date().isoformat())
 
 
 @app.route("/entrenador/google-calendar")
