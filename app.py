@@ -304,8 +304,10 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_date TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS original_time TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS session_group_id TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS is_recovery BOOLEAN NOT NULL DEFAULT FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
+    c.execute("UPDATE classes SET is_recovery=TRUE WHERE status='rescheduled' AND original_date IS NOT NULL AND is_recovery=FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
@@ -1148,6 +1150,34 @@ def student_detail(sid):
     c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages, summary=summary, last_work=last_work)
 
 
+@app.route("/entrenador/clase/<int:class_id>/compartir", methods=["POST"])
+@coach_required
+def add_student_to_shared_class(class_id):
+    c=db()
+    current=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
+    if not current:
+        c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    try: sid=int(request.form.get("student_id",""))
+    except (TypeError,ValueError):
+        c.close(); flash("Selecciona un alumno válido."); return redirect(url_for("edit_class",class_id=class_id))
+    student=c.execute("SELECT * FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
+    if not student:
+        c.close(); flash("Alumno no encontrado."); return redirect(url_for("edit_class",class_id=class_id))
+    if sid==current["student_id"]:
+        c.close(); flash("Ese alumno ya pertenece a la clase."); return redirect(url_for("edit_class",class_id=class_id))
+    duplicate=c.execute("SELECT id FROM classes WHERE student_id=%s AND date=%s AND time=%s AND status<>'cancelled' LIMIT 1",(sid,current["date"],current["time"])).fetchone()
+    if duplicate:
+        c.close(); flash("Ese alumno ya tiene una clase en ese horario."); return redirect(url_for("edit_class",class_id=class_id))
+    group=current.get("session_group_id") or str(uuid.uuid4())
+    c.execute("UPDATE classes SET session_group_id=%s WHERE id=%s",(group,class_id))
+    row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
+        VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",
+        (sid,current["date"],current["time"],student["mode"],student["place"],student["tariff"],current["date"],current["time"],"Clase compartida",group)).fetchone()
+    sync_payment_status(c,sid)
+    c.commit(); c.close(); sync_class_to_google(row["id"])
+    flash(f"{student['student_name']} fue agregado a la clase compartida.")
+    return redirect(url_for("edit_class",class_id=class_id))
+
 @app.route("/entrenador/clase/<int:class_id>/editar", methods=["GET", "POST"])
 @coach_required
 def edit_class(class_id):
@@ -1187,8 +1217,10 @@ def edit_class(class_id):
         else:
             flash("Clase guardada sin cambios de horario.")
         return redirect(request.form.get("return_to") or url_for("student_detail", sid=current["student_id"]))
+    students=c.execute("SELECT id,student_name,age FROM students WHERE status='active' AND id<>%s ORDER BY student_name",(current["student_id"],)).fetchall()
+    shared_members=c.execute("SELECT classes.id,students.student_name,students.age FROM classes JOIN students ON students.id=classes.student_id WHERE classes.session_group_id=%s AND classes.status<>'cancelled' ORDER BY students.student_name",(current.get("session_group_id"),)).fetchall() if current.get("session_group_id") else []
     c.close()
-    return render_template("edit_class.html", current=current, return_to=request.args.get("return_to", ""))
+    return render_template("edit_class.html", current=current, students=students, shared_members=shared_members, return_to=request.args.get("return_to", ""))
 
 
 @app.route("/entrenador/clase/<int:class_id>/estado", methods=["POST"])
@@ -1431,12 +1463,14 @@ def parent_home():
         current_month=today.strftime("%Y-%m")
         current_payments=[p for p in payments_rows if p["month"]==current_month and p["status"]=='paid']
         current_paid=sum(float(p["amount"] or 0) for p in current_payments)
-        attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s", (s["id"],current_month+'%')).fetchone()["n"]
-        month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
-        month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled'", (s["id"],current_month+'%')).fetchone()["n"]
-        # The monthly summary includes classes already taken as well as upcoming
-        # classes. The parent should see the full number scheduled for the month,
-        # not only the remaining future classes.
+        attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
+        month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
+        month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
+        recovery_pending=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
+        recovery_paid=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND payment_status='paid'", (s["id"],)).fetchone()["n"]
+        # Monthly package view: normal classes belong to the current payment period;
+        # an authorized recovery is shown separately and keeps the payment attached
+        # to its original class instead of consuming the next month's package.
         scheduled_count=month_scheduled
         paid_count=month_paid_classes
         pending_count=max(0, month_scheduled-month_paid_classes)
@@ -1449,7 +1483,7 @@ def parent_home():
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
             "month_paid_classes":month_paid_classes, "month_attended":attended_count, "month_payment_status":month_payment_status,
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
-            "extra_count":extra_count, "reprogrammable_id":reprogrammable_id,
+            "extra_count":extra_count, "recovery_pending":recovery_pending, "recovery_paid":recovery_paid, "reprogrammable_id":reprogrammable_id,
         })
     # In-app reminders: within 2 hours before the class, per child/class,
     # and persistently dismissed per parent account across devices.
@@ -1667,13 +1701,21 @@ def coach_reschedule(class_id):
             if not (same_group or same_student):
                 c.close(); flash("Ese horario ya está ocupado por otra clase."); return redirect(url_for("coach_reschedule",class_id=class_id))
         old_date,old_time=current["date"],current["time"]
-        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+        move_group=request.form.get("move_group") == "yes"
+        if move_group and current.get("session_group_id"):
+            rows=c.execute("SELECT id FROM classes WHERE session_group_id=%s AND status IN ('scheduled','rescheduled','postponed')",(current["session_group_id"],)).fetchall()
+            c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE session_group_id=%s AND status IN ('scheduled','rescheduled','postponed')",(new_date,new_time,old_date,old_time,current["session_group_id"]))
+            sync_ids=[r["id"] for r in rows]
+        else:
+            c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+            sync_ids=[class_id]
         c.commit(); c.close()
-        sync_class_to_google(class_id)
-        flash(f"Clase reprogramada para {display_date(new_date)} · {display_time(new_time)}.")
+        for sync_id in sync_ids: sync_class_to_google(sync_id)
+        flash(f"{'Clase compartida' if move_group and current.get('session_group_id') else 'Clase'} reprogramada para {display_date(new_date)} · {display_time(new_time)}.")
         return redirect(url_for("student_detail",sid=current["student_id"]))
+    shared_count=0 if not current.get("session_group_id") else c.execute("SELECT COUNT(*) AS n FROM classes WHERE session_group_id=%s AND status<>'cancelled'",(current["session_group_id"],)).fetchone()["n"]
     c.close()
-    return render_template("reschedule.html",current=current,slots=[],coach_mode=True,now_date=datetime.now(PERU_TZ).date().isoformat())
+    return render_template("reschedule.html",current=current,slots=[],coach_mode=True,now_date=datetime.now(PERU_TZ).date().isoformat(),shared_count=shared_count)
 
 
 @app.route("/entrenador/google-calendar")
