@@ -308,6 +308,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_source_class_id INTEGER")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_payment_id INTEGER")
     c.execute("UPDATE classes SET is_recovery=TRUE WHERE status='rescheduled' AND original_date IS NOT NULL AND is_recovery=FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
@@ -546,57 +547,92 @@ def sync_payment_status(c, student_id=None):
 
 
 def attach_recovery_payment(c, class_id, source_class_id=None):
-    """Attach a newly created/reassigned class to a prior month's paid class.
+    """Attach a future class to the monthly payment that covered its cancelled source class.
 
-    This is used when a coach places an existing student into a shared class in
-    the following month. It repairs the common case where the original class
-    was cancelled after the new shared class was created.
+    A recovery is not a new payable class: it reuses the payment belonging to
+    the original period. This also supports the real-world workflow where the
+    coach first adds an existing student to a shared class and only afterwards
+    cancels the original class.
     """
     row=c.execute("SELECT * FROM classes WHERE id=%s", (class_id,)).fetchone()
     if not row or row.get("payment_id") is not None:
         return False
+
     target_date=date.fromisoformat(row["date"])
     candidates=[]
     if source_class_id:
         src=c.execute("SELECT * FROM classes WHERE id=%s AND student_id=%s AND status='cancelled'", (source_class_id,row["student_id"])).fetchone()
         if src: candidates=[src]
     if not candidates:
-        # Prefer a cancelled class from the immediately preceding month with
-        # the same weekday/time. This is deliberately conservative.
         prev_month=(target_date.replace(day=1)-timedelta(days=1)).strftime('%Y-%m')
         candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
-            AND date LIKE %s AND time=%s ORDER BY date DESC,id DESC""", (row["student_id"],prev_month+'%',row["time"])).fetchall()
-        if not candidates:
-            candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
-                AND date LIKE %s ORDER BY date DESC,id DESC LIMIT 3""", (row["student_id"],prev_month+'%')).fetchall()
+            AND date LIKE %s AND recovery_source_class_id IS NULL
+            ORDER BY date DESC,id DESC""", (row["student_id"],prev_month+'%')).fetchall()
+
+    student_row=c.execute("SELECT tariff FROM students WHERE id=%s", (row["student_id"],)).fetchone()
+    tariff=float(student_row["tariff"] or 0) if student_row else 0
+
     for src in candidates:
         src_month=src["date"][:7]
+        # First choice: the payment that was attached to the original class.
+        payment_ids=[]
+        if src.get("recovery_payment_id"):
+            payment_ids.append(src["recovery_payment_id"])
+        if src.get("payment_id") and src["payment_id"] not in payment_ids:
+            payment_ids.append(src["payment_id"])
+
+        # Fallback for legacy rows where cancellation already removed the
+        # payment_id: use a paid payment from the original month. Support both
+        # normal monthly payments and legacy 8-class package records.
         payments=c.execute("""SELECT * FROM payments WHERE student_id=%s AND month=%s AND status='paid'
-            AND payment_type='regular' ORDER BY id DESC""", (row["student_id"],src_month)).fetchall()
-        for p in payments:
-            tariff=float(c.execute("SELECT tariff FROM students WHERE id=%s",(row["student_id"],)).fetchone()["tariff"] or 0)
-            cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
+            AND payment_type IN ('regular','package_8') ORDER BY id DESC""", (row["student_id"],src_month)).fetchall()
+        payment_ids.extend([p["id"] for p in payments if p["id"] not in payment_ids])
+
+        for pid in payment_ids:
+            p=c.execute("SELECT * FROM payments WHERE id=%s AND student_id=%s AND status='paid'", (pid,row["student_id"])).fetchone()
+            if not p:
+                continue
+            if p["payment_type"]=='regular':
+                cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
+            else:
+                cap=int(p["sessions_total"] or 8)
             used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status<>'cancelled'",(p["id"],)).fetchone()["n"]
-            if used < cap:
-                c.execute("""UPDATE classes SET payment_id=%s,payment_status='paid',is_recovery=TRUE,
-                    original_date=%s,original_time=%s,recovery_source_class_id=%s,notes=CASE WHEN COALESCE(notes,'')='' THEN 'Recuperación de un período anterior' ELSE notes END
-                    WHERE id=%s""",(p["id"],src["date"],src["time"],src["id"],class_id))
-                c.execute("UPDATE classes SET notes=CASE WHEN COALESCE(notes,'')='' THEN %s ELSE notes END WHERE id=%s",(f"Recuperada en clase {class_id}",src["id"]))
-                return True
+            # A cancelled source itself is not part of used, so its original
+            # payment capacity becomes available for the recovery.
+            if used >= cap:
+                # Legacy repair: if the source class was cancelled after the
+                # payment was recorded but before it was linked, the payment
+                # capacity may reflect only the classes that were still active.
+                # The cancelled source itself is the missing paid class. For a
+                # monthly payment, expand the recorded session count by one so
+                # the original payment can cover its recovery rather than
+                # creating a false new debt.
+                if p["payment_type"] == 'regular' and src.get("recovery_source_class_id") is None:
+                    cap = used + 1
+                    c.execute("UPDATE payments SET sessions_total=GREATEST(COALESCE(sessions_total,0),%s) WHERE id=%s", (cap,p["id"]))
+                else:
+                    continue
+            c.execute("""UPDATE classes SET payment_id=%s,payment_status='paid',is_recovery=TRUE,
+                original_date=%s,original_time=%s,recovery_source_class_id=%s,
+                notes=CASE WHEN COALESCE(notes,'')='' THEN 'Recuperación de un período anterior' ELSE notes END
+                WHERE id=%s""",(p["id"],src["date"],src["time"],src["id"],class_id))
+            c.execute("""UPDATE classes SET recovery_payment_id=%s,
+                notes=CASE WHEN COALESCE(notes,'')='' THEN %s ELSE notes END
+                WHERE id=%s""",(p["id"],f"Recuperada en clase {class_id}",src["id"]))
+            return True
     return False
 
 
 def repair_pending_recoveries(c, student_id=None):
-    """Repair pending future classes that were created as replacements for a
-    cancelled class from the immediately preceding month.
+    """Repair future classes that replace a cancelled class from the prior month.
 
-    This is intentionally conservative: only classes in a shared group are
-    considered, and attach_recovery_payment itself requires a cancelled source
-    class plus unused capacity in that source month's paid monthly payment.
+    This covers both the normal reprogramming flow and the manual workflow in
+    which the coach first adds the student to a Clase compartida and later
+    cancels the original class.
     """
     query="""SELECT id FROM classes WHERE student_id=%s
         AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed')
-        AND session_group_id IS NOT NULL ORDER BY date,time,id"""
+        ORDER BY date,time,id"""
     rows=c.execute(query,(student_id,)).fetchall() if student_id is not None else []
     repaired=0
     for r in rows:
@@ -1308,9 +1344,11 @@ def update_class_status(class_id):
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
     if status=="cancelled":
-        # A cancelled class should not keep consuming a payment. This lets the
-        # payment cover the correct class if the Coach is fixing a scheduling error.
-        c.execute("UPDATE classes SET status=%s,payment_id=NULL,payment_status='pending' WHERE id=%s",(status,class_id))
+        # Keep the payment relationship available for a later recovery. A
+        # cancelled class does not count as consumed by sync_payment_status.
+        c.execute("UPDATE classes SET status=%s,recovery_payment_id=COALESCE(recovery_payment_id,payment_id),payment_status=CASE WHEN payment_id IS NOT NULL THEN 'paid' ELSE 'pending' END WHERE id=%s",(status,class_id))
+        repair_pending_recoveries(c, row["student_id"])
+        sync_payment_status(c, row["student_id"])
     else:
         c.execute("UPDATE classes SET status=%s WHERE id=%s",(status,class_id))
         if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))

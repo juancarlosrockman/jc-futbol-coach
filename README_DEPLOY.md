@@ -1,32 +1,27 @@
-# JC Fútbol Coach v12.14 (PREPARACIÓN PARCIAL)
+# JC Fútbol Coach v12.15.2
 
-Base: v12.13 adjunta.
+Base: v12.15.1.
 
-## Incluido en esta preparación
-- Recordatorios dentro de la app para padres: aparecen cuando una clase futura está a 2 horas o menos de comenzar.
-- Recordatorios separados por clase/alumno y persistencia server-side al marcar “Entendido”; se mantienen vistos entre sesiones/dispositivos.
-- Los recordatorios se basan en el horario actual de la clase y solo consideran estados programada/reprogramada/pospuesta, por lo que clases canceladas no se muestran.
-- Tablas preparadas para guardar suscripciones push y configuración/token de Google Calendar.
-- Endpoints protegidos de suscripción/desuscripción push y entrega de clave pública VAPID desde variable de entorno.
+## Cambio principal
+Corrige el flujo real de una clase reprogramada que luego se integra a una **Clase compartida**.
 
-## Aún requiere completar antes de usar en producción
-- Entrega de push Web Push real en segundo plano requiere integrar el emisor servidor (VAPID privado) y el despacho programado de avisos. La base y endpoints de suscripción están, pero no se debe anunciar como push funcional aún.
-- Google Calendar OAuth y sincronización de creación/actualización/cancelación aún no están implementados. No configurar credenciales de Google todavía.
+- Una clase nueva agregada a una clase compartida puede quedar vinculada a la recuperación de una clase anterior.
+- La recuperación conserva el pago del período original y no se convierte en una deuda nueva.
+- Si el coach agrega primero al alumno a la clase compartida y después anula la clase original, la anulación dispara la reparación de la recuperación.
+- Las cancelaciones ya no destruyen la relación con el pago original; la clase cancelada no consume el pago mientras queda disponible para una recuperación.
+- Se añadió una migración para `recovery_payment_id`.
+- Se amplió la reparación para registros heredados en los que la clase cancelada ya había perdido su `payment_id`.
+- Las recuperaciones se identifican visualmente como **Recuperación pagada** en la ficha del alumno.
 
-## Variables actuales
-Mantener DATABASE_URL y SECRET_KEY existentes.
-VAPID_PUBLIC_KEY solo es necesaria al completar Web Push; no es necesaria para los recordatorios dentro de la app.
+## Caso de Marianito
+Si existe una clase de septiembre ya pagada, se cancela y luego se agrega a una clase compartida de octubre, el sistema debe vincular la clase de octubre al pago de septiembre como recuperación, en lugar de mostrarla como "Pendiente de pago".
 
 ## Importante
-Esta versión no se ha conectado ni desplegado contra la base real de Render. Las migraciones se ejecutan por init_db() al iniciar la app, como en versiones anteriores. Probar primero en un entorno/base de datos de pruebas.
+La migración se ejecuta automáticamente mediante `init_db()` al iniciar la aplicación.
 
-
-## Google Calendar (v12.14)
-After deploying, configure these Render environment variables:
-- GOOGLE_CLIENT_ID
-- GOOGLE_CLIENT_SECRET
-- GOOGLE_REDIRECT_URI = https://jc-futbol-coach.onrender.com/oauth/google/callback
-
-In Google Cloud, enable Google Calendar API, configure OAuth consent, and register the redirect URI above in the OAuth Web application client. Then sign into the Coach account, open `/entrenador/google-calendar`, and select “Conectar con Google”. The app creates a dedicated calendar named “JC Fútbol Coach – Clases” and backfills currently scheduled/rescheduled/postponed classes.
-
-Access and refresh tokens are encrypted in PostgreSQL using a key derived from the existing SECRET_KEY. Keep SECRET_KEY stable; changing it will require reconnecting Google. Calendar events are created/updated on class create/edit/reschedule and deleted on cancellation or deletion. The app uses a 60-minute event duration, with America/Lima timezone. Existing personal calendar events are not edited.
+No se han ejecutado pruebas contra la base real de Render. Antes de desplegar, verificar específicamente:
+1. Marianito: clase original septiembre + pago mensual.
+2. Clase compartida con Diego en octubre.
+3. Cancelación de la clase original.
+4. Que la recuperación de octubre quede pagada y no consuma el pago de octubre.
+5. Que no se genere una segunda deuda.
