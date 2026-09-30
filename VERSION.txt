@@ -1,1 +1,1 @@
-JC Futbol Coach v12.15.2 - recuperaciones pagadas, clases compartidas y reparación de pagos mensuales
+JC Futbol Coach v12.15.5 - reparación automática de recuperaciones existentes y clases compartidas

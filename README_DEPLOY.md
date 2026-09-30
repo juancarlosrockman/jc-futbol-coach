@@ -25,3 +25,14 @@ No se han ejecutado pruebas contra la base real de Render. Antes de desplegar, v
 3. Cancelación de la clase original.
 4. Que la recuperación de octubre quede pagada y no consuma el pago de octubre.
 5. Que no se genere una segunda deuda.
+
+
+## v12.15.5 — Reparación automática al desplegar
+
+- Al iniciar la aplicación, revisa automáticamente clases futuras ya existentes que estén pendientes de pago.
+- Si encuentra una clase cancelada del período anterior con pago correspondiente, vincula la clase futura como recuperación pagada.
+- Esto cubre el caso en que el alumno ya fue agregado a una Clase compartida antes de cancelar la clase original.
+- No requiere volver a agregar al alumno ni registrar otro pago.
+- La recuperación conserva el pago del período original y no consume el pago del mes nuevo.
+
+Después del deploy, revisar la ficha de Marianito. No registrar un pago adicional antes de verificar el resultado.

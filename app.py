@@ -323,6 +323,13 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_availability_zone_turn ON availability(zone,turn,active)")
     merge_duplicate_parent_accounts(c)
     migrate_plaintext_passwords(c)
+
+    # Repair existing database records automatically. This is deliberately
+    # executed at startup so already-created shared classes (such as a student
+    # who was added to a class before the original class was cancelled) do not
+    # require the coach to add the student again.
+    repair_all_existing_recoveries(c)
+    sync_payment_status(c)
     c.commit()
 
     coach_user = os.environ.get("COACH_USER", "").strip()
@@ -547,12 +554,11 @@ def sync_payment_status(c, student_id=None):
 
 
 def attach_recovery_payment(c, class_id, source_class_id=None):
-    """Attach a future class to the monthly payment that covered its cancelled source class.
+    """Attach a future class to the payment of its cancelled source class.
 
-    A recovery is not a new payable class: it reuses the payment belonging to
-    the original period. This also supports the real-world workflow where the
-    coach first adds an existing student to a shared class and only afterwards
-    cancels the original class.
+    A recovery is never a new debt. This helper is intentionally tolerant of
+    the real coach workflow: the new shared class may be created first and the
+    old class cancelled afterwards, or the old class may already be cancelled.
     """
     row=c.execute("SELECT * FROM classes WHERE id=%s", (class_id,)).fetchone()
     if not row or row.get("payment_id") is not None:
@@ -565,9 +571,18 @@ def attach_recovery_payment(c, class_id, source_class_id=None):
         if src: candidates=[src]
     if not candidates:
         prev_month=(target_date.replace(day=1)-timedelta(days=1)).strftime('%Y-%m')
+        # Prefer a cancelled class from the immediately preceding month that
+        # matches the destination's time/place. This is the common manual
+        # workflow when a student is added to a shared class first.
         candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
             AND date LIKE %s AND recovery_source_class_id IS NULL
-            ORDER BY date DESC,id DESC""", (row["student_id"],prev_month+'%')).fetchall()
+            AND (time=%s OR place=%s)
+            ORDER BY CASE WHEN time=%s AND place=%s THEN 0 ELSE 1 END, date DESC,id DESC""",
+            (row["student_id"],prev_month+'%',row.get("time"),row.get("place"),row.get("time"),row.get("place"))).fetchall()
+        if not candidates:
+            candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
+                AND date LIKE %s AND recovery_source_class_id IS NULL
+                ORDER BY date DESC,id DESC""", (row["student_id"],prev_month+'%')).fetchall()
 
     student_row=c.execute("SELECT tariff FROM students WHERE id=%s", (row["student_id"],)).fetchone()
     tariff=float(student_row["tariff"] or 0) if student_row else 0
@@ -587,6 +602,15 @@ def attach_recovery_payment(c, class_id, source_class_id=None):
         payments=c.execute("""SELECT * FROM payments WHERE student_id=%s AND month=%s AND status='paid'
             AND payment_type IN ('regular','package_8') ORDER BY id DESC""", (row["student_id"],src_month)).fetchall()
         payment_ids.extend([p["id"] for p in payments if p["id"] not in payment_ids])
+        # Legacy/manual records can have a payment month stored differently
+        # from the class date. If the cancelled source was already paid, use
+        # the most recent paid monthly payment before the recovery date as a
+        # final fallback, never the new month's payment.
+        if not payment_ids:
+            fallback=c.execute("""SELECT * FROM payments WHERE student_id=%s AND status='paid'
+                AND payment_type IN ('regular','package_8') AND month < %s
+                ORDER BY month DESC,id DESC LIMIT 3""", (row["student_id"],row["date"][:7])).fetchall()
+            payment_ids.extend([p["id"] for p in fallback if p["id"] not in payment_ids])
 
         for pid in payment_ids:
             p=c.execute("SELECT * FROM payments WHERE id=%s AND student_id=%s AND status='paid'", (pid,row["student_id"])).fetchone()
@@ -637,6 +661,25 @@ def repair_pending_recoveries(c, student_id=None):
     repaired=0
     for r in rows:
         if attach_recovery_payment(c,r["id"]): repaired+=1
+    return repaired
+
+
+def repair_all_existing_recoveries(c):
+    """Repair already-created future classes without requiring another user action.
+
+    This is intentionally run during startup so a class that is already in the
+    database (for example, an existing student already added to a shared class)
+    can be converted into the recovery of a cancelled, already-paid class.
+    It only considers pending future classes and lets attach_recovery_payment
+    enforce the prior-month/source-payment rules.
+    """
+    rows=c.execute("""SELECT DISTINCT student_id FROM classes
+        WHERE payment_id IS NULL AND payment_status='pending'
+        AND status IN ('scheduled','rescheduled','postponed')
+        AND date >= %s""", (datetime.now(PERU_TZ).date().isoformat(),)).fetchall()
+    repaired=0
+    for r in rows:
+        repaired += repair_pending_recoveries(c, r["student_id"])
     return repaired
 
 
@@ -1272,19 +1315,33 @@ def add_student_to_shared_class(class_id):
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("edit_class",class_id=class_id))
     if sid==current["student_id"]:
         c.close(); flash("Ese alumno ya pertenece a la clase."); return redirect(url_for("edit_class",class_id=class_id))
-    duplicate=c.execute("SELECT id FROM classes WHERE student_id=%s AND date=%s AND time=%s AND status<>'cancelled' LIMIT 1",(sid,current["date"],current["time"])).fetchone()
+    duplicate=c.execute("SELECT * FROM classes WHERE student_id=%s AND date=%s AND time=%s AND status<>'cancelled' ORDER BY id LIMIT 1",(sid,current["date"],current["time"])).fetchone()
     if duplicate:
-        c.close(); flash("Ese alumno ya tiene una clase en ese horario."); return redirect(url_for("edit_class",class_id=class_id))
+        # IMPORTANT: the student is already scheduled at this exact time.
+        # Do not create a second class. Reuse the existing class and turn the
+        # two records into one Clase compartida. This is the real workflow for
+        # a student such as Marianito who was already added manually.
+        group=current.get("session_group_id") or duplicate.get("session_group_id") or str(uuid.uuid4())
+        if current.get("session_group_id") and duplicate.get("session_group_id") and current.get("session_group_id") != duplicate.get("session_group_id"):
+            # Merge both existing groups into the current shared class.
+            c.execute("UPDATE classes SET session_group_id=%s WHERE session_group_id=%s",(group,duplicate["session_group_id"]))
+        else:
+            c.execute("UPDATE classes SET session_group_id=%s WHERE id IN (%s,%s)" % ("%s", "%s", "%s"),(group,current["id"],duplicate["id"]))
+        # If the existing class is a recovery created manually, attach it to
+        # the original paid class instead of making it a new unpaid class.
+        attach_recovery_payment(c,duplicate["id"])
+        repair_pending_recoveries(c,sid)
+        sync_payment_status(c,sid)
+        c.commit(); c.close(); sync_class_to_google(duplicate["id"])
+        flash(f"{student['student_name']} ya tenía una clase en ese horario y fue incorporado a la Clase compartida.")
+        return redirect(url_for("edit_class",class_id=class_id))
     group=current.get("session_group_id") or str(uuid.uuid4())
     c.execute("UPDATE classes SET session_group_id=%s WHERE id=%s",(group,class_id))
     row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
         VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",
         (sid,current["date"],current["time"],student["mode"],student["place"],student["tariff"],current["date"],current["time"],"Clase compartida",group)).fetchone()
-    # If this new shared-class slot is actually a recovery for the student,
-    # preserve the original month's payment instead of treating it as a new
-    # payable class. This also repairs the manual workflow where the old class
-    # was cancelled after the shared class was created.
     attach_recovery_payment(c,row["id"])
+    repair_pending_recoveries(c,sid)
     sync_payment_status(c,sid)
     c.commit(); c.close(); sync_class_to_google(row["id"])
     flash(f"{student['student_name']} fue agregado a la clase compartida.")
