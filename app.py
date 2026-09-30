@@ -152,41 +152,77 @@ def _calendar_event_payload(row):
         "extendedProperties": {"private": {"jcfc_class_id": str(row["id"])}}
     }
 
+def _set_google_sync_state(class_id, status, error=None):
+    c = db()
+    try:
+        if status == "synced":
+            c.execute("UPDATE classes SET google_sync_status=%s,google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (status, class_id))
+        else:
+            c.execute("UPDATE classes SET google_sync_status=%s,google_sync_error=%s WHERE id=%s", (status, error, class_id))
+        c.commit()
+    finally:
+        c.close()
+
+
 def sync_class_to_google(class_id, delete=False):
-    """Best-effort sync. App scheduling remains usable if Google is temporarily unavailable."""
+    """Synchronize one JCFC class after the database transaction has succeeded.
+    Google errors never roll back the JCFC class; they are recorded so the coach
+    can retry synchronization later.
+    """
     c = db()
     try:
         coach = c.execute("SELECT id FROM users WHERE role='coach' ORDER BY id LIMIT 1").fetchone()
         if not coach:
-            return False
+            return False, "No hay entrenador configurado."
         setting = _google_setting(c, coach["id"])
         if not setting or not setting.get("refresh_token"):
-            return False
+            c.execute("UPDATE classes SET google_sync_status='not_connected',google_sync_error=%s WHERE id=%s", ("Google Calendar no está conectado.", class_id))
+            c.commit()
+            return False, "Google Calendar no está conectado."
         row = c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone
-            FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s""",(class_id,)).fetchone()
-        event_id = row.get("google_event_id") if row else None
+            FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s""", (class_id,)).fetchone()
+        if not row:
+            return False, "Clase no encontrada."
+        event_id = row.get("google_event_id")
         calendar_id = setting.get("calendar_id") or _ensure_google_calendar(c, setting)
-        if delete or not row or row.get("status") == "cancelled":
+        if delete or row.get("status") == "cancelled":
             if event_id:
                 try:
                     _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}")
                 except RuntimeError as e:
                     if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
                         raise
-                c.execute("UPDATE classes SET google_event_id=NULL WHERE id=%s",(class_id,))
+                c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
+            else:
+                c.execute("UPDATE classes SET google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
         elif row.get("status") in ("scheduled","rescheduled","postponed"):
             payload = _calendar_event_payload(row)
             if event_id:
-                event = _google_api(c, setting, "PATCH", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}", json=payload)
+                try:
+                    event = _google_api(c, setting, "PATCH", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}", json=payload)
+                except RuntimeError as e:
+                    # If the event was deleted directly in Google Calendar,
+                    # recreate it instead of leaving JCFC permanently unsynced.
+                    if "HTTP 404" in str(e) or "HTTP 410" in str(e):
+                        c.execute("UPDATE classes SET google_event_id=NULL WHERE id=%s", (class_id,))
+                        event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
+                    else:
+                        raise
             else:
                 event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
-                c.execute("UPDATE classes SET google_event_id=%s WHERE id=%s",(event["id"],class_id))
+            c.execute("UPDATE classes SET google_event_id=%s,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (event["id"], class_id))
         c.commit()
-        return True
+        return True, None
     except Exception as exc:
         c.rollback()
-        app.logger.warning("Google Calendar sync failed for class %s: %s", class_id, exc)
-        return False
+        message = str(exc)[:500]
+        try:
+            c.execute("UPDATE classes SET google_sync_status='error',google_sync_error=%s WHERE id=%s", (message, class_id))
+            c.commit()
+        except Exception:
+            c.rollback()
+        app.logger.exception("Google Calendar sync failed for class %s", class_id)
+        return False, message
     finally:
         c.close()
 
@@ -312,6 +348,9 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_month TEXT")
     c.execute("UPDATE classes SET is_recovery=TRUE WHERE status='rescheduled' AND original_date IS NOT NULL AND is_recovery=FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_sync_status TEXT NOT NULL DEFAULT 'pending'")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_sync_error TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_synced_at TIMESTAMP")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
@@ -852,6 +891,12 @@ def service_worker():
 
 @app.route("/")
 def home():
+    # Keep an authenticated user inside the correct private area when the
+    # browser/PWA is reopened without explicitly logging out.
+    if session.get("role") == "coach":
+        return redirect(url_for("dashboard"))
+    if session.get("role") == "parent":
+        return redirect(url_for("parent_home"))
     return render_template("home.html")
 
 
@@ -1283,23 +1328,31 @@ def student_detail(sid):
     c.commit(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
     if not s:
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
-    classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC", (sid,)).fetchall()
+    classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC,id DESC", (sid,)).fetchall()
     payments = c.execute("SELECT * FROM payments WHERE student_id=%s ORDER BY month DESC,id DESC", (sid,)).fetchall()
     last_work = c.execute("SELECT date,time,work_notes FROM classes WHERE student_id=%s AND status='attended' AND work_notes IS NOT NULL AND BTRIM(work_notes)<>'' ORDER BY date DESC,time DESC,id DESC LIMIT 1", (sid,)).fetchone()
+    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
     active_classes=[x for x in classes if x["status"]!='cancelled']
+    period_classes=[]
+    for x in active_classes:
+        period=(x.get("recovery_month") or (x.get("original_date")[:7] if x.get("is_recovery") and x.get("original_date") else None) or x["date"][:7])
+        if period==current_month:
+            period_classes.append(x)
     summary={
-        "scheduled": len(active_classes),
-        "paid": sum(1 for x in active_classes if x["payment_status"]=='paid'),
-        "attended": sum(1 for x in active_classes if x["status"]=='attended'),
-        "pending": sum(1 for x in active_classes if x["payment_status"]!='paid'),
+        "scheduled": len(period_classes),
+        "paid": sum(1 for x in period_classes if x["payment_status"]=='paid'),
+        "attended": sum(1 for x in active_classes if x["status"]=='attended' and x["date"].startswith(current_month)),
+        "pending": sum(1 for x in period_classes if x["payment_status"]!='paid'),
     }
+    upcoming=[x for x in active_classes if x["date"]>=datetime.now(PERU_TZ).date().isoformat() and x["status"] in ('scheduled','rescheduled','postponed')]
+    history=[x for x in active_classes if x["date"]<datetime.now(PERU_TZ).date().isoformat()]
     packages = []
     for p in payments:
         if p["payment_type"] == "package_8":
             assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
             attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
             packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
-    c.close(); return render_template("student_detail.html", s=s, classes=classes, payments=payments, packages=packages, summary=summary, last_work=last_work)
+    c.close(); return render_template("student_detail.html", s=s, classes=classes, period_classes=period_classes, upcoming=upcoming, history=history, current_month=current_month, payments=payments, packages=packages, summary=summary, last_work=last_work)
 
 
 @app.route("/entrenador/clase/<int:class_id>/compartir", methods=["POST"])
@@ -1504,6 +1557,7 @@ def delete_class(class_id):
 def new_class():
     c=db()
     if request.method=="POST":
+        created_for_sync = []
         try:
             sid=int(request.form.get("student_id",""))
         except (TypeError,ValueError):
@@ -1515,6 +1569,7 @@ def new_class():
             if not created: raise ValueError("no_classes")
             pid=save_optional_payment(c,sid,request.form,created)
             c.commit()
+            created_for_sync = list(created)
         except ValueError as exc:
             c.rollback(); c.close()
             msg = ("El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else ("No se pudo registrar el pago. Revisa el monto." if str(exc) in ("payment_amount", "package_invalid") else ("Agrega al menos una fecha y hora válidas." if str(exc)=="invalid_class" else ("Ese horario no está disponible para reprogramar." if str(exc) in ("occupied_class", "duplicate_class") else "Agrega al menos una fecha y hora válidas."))))
@@ -1522,9 +1577,16 @@ def new_class():
         except Exception:
             c.rollback(); c.close(); flash("No se pudieron registrar las clases. Revisa los datos antes de volver a intentarlo."); return redirect(url_for("new_class",student=sid))
         c.close()
+        sync_failures = []
         for new_class_id in created_for_sync:
-            sync_class_to_google(new_class_id)
-        flash(f"Se registraron {len(created)} clase(s) correctamente."); return redirect(url_for("student_detail",sid=sid))
+            ok, error = sync_class_to_google(new_class_id)
+            if not ok:
+                sync_failures.append(error or "Error de sincronización")
+        if sync_failures:
+            flash(f"Se registraron {len(created)} clase(s). Algunas quedaron guardadas en JCFC pero no se sincronizaron con Google Calendar. Puedes reintentarlo desde Google Calendar.")
+        else:
+            flash(f"Se registraron {len(created)} clase(s) y se sincronizaron con Google Calendar.")
+        return redirect(url_for("student_detail",sid=sid))
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall(); selected_id=request.args.get("student",type=int)
     selected=c.execute("SELECT * FROM students WHERE id=%s",(selected_id,)).fetchone() if selected_id else None
     zones=c.execute("SELECT DISTINCT zone FROM (SELECT zone FROM students WHERE zone<>'' UNION SELECT zone FROM availability WHERE active=TRUE AND zone<>'') z ORDER BY zone").fetchall()
@@ -1689,26 +1751,30 @@ def parent_home():
         current_month=today.strftime("%Y-%m")
         current_payments=[p for p in payments_rows if p["month"]==current_month and p["status"]=='paid']
         current_paid=sum(float(p["amount"] or 0) for p in current_payments)
-        attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
-        month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
-        month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
-        # A recovery scheduled in a later month still belongs to the original
-        # paid period. It must therefore be visible in the student's overall
-        # scheduled/paid counts, without being counted as an October package
-        # class or consuming the October payment.
-        recovery_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
-        recovery_paid_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND payment_status='paid' AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
-        recovery_pending=recovery_scheduled
-        recovery_paid=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND payment_status='paid'", (s["id"],)).fetchone()["n"]
-        # Monthly package view: normal classes belong to the current payment period;
-        # a scheduled recovery from a previous period is displayed alongside them
-        # because it is a paid, already-agendated class, but it does not consume
-        # the current month's package.
-        scheduled_count=month_scheduled + recovery_scheduled
-        paid_count=month_paid_classes + recovery_paid_scheduled
+        # The payment period is separate from the physical training date.
+        # Normal classes belong to their calendar month; a recovery belongs to
+        # recovery_month (the original paid period), even if trained later.
+        month_scheduled=c.execute("""SELECT COUNT(*) AS n FROM classes
+            WHERE student_id=%s AND status<>'cancelled' AND is_recovery=FALSE AND date LIKE %s""", (s["id"],current_month+'%')).fetchone()["n"]
+        month_paid_classes=c.execute("""SELECT COUNT(*) AS n FROM classes
+            WHERE student_id=%s AND status<>'cancelled' AND is_recovery=FALSE AND date LIKE %s AND payment_status='paid'""", (s["id"],current_month+'%')).fetchone()["n"]
+        attended_count=c.execute("""SELECT COUNT(*) AS n FROM classes
+            WHERE student_id=%s AND status='attended' AND date LIKE %s""", (s["id"],current_month+'%')).fetchone()["n"]
+        recovery_for_month=c.execute("""SELECT * FROM classes WHERE student_id=%s AND is_recovery=TRUE
+            AND status<>'cancelled' AND COALESCE(recovery_month, original_date, date) LIKE %s
+            ORDER BY date,time""", (s["id"],current_month+'%')).fetchall()
+        recovery_scheduled=sum(1 for x in recovery_for_month if x["status"] in ('scheduled','rescheduled','postponed'))
+        recovery_paid_scheduled=sum(1 for x in recovery_for_month if x["status"] in ('scheduled','rescheduled','postponed') and x["payment_status"]=='paid')
+        recovery_pending=sum(1 for x in recovery_for_month if x["status"] in ('scheduled','rescheduled','postponed'))
+        # Current-month counters exclude recoveries from the new month's package.
+        # Recoveries are shown separately because their payment belongs to the
+        # original month.
+        scheduled_count=month_scheduled + len(recovery_for_month)
+        paid_count=month_paid_classes + sum(1 for x in recovery_for_month if x["payment_status"]=='paid')
         pending_count=max(0, month_scheduled-month_paid_classes)
-        month_payment_status = current_paid > 0 or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
-        extra_count=max(0, scheduled_count-paid_count)
+        month_payment_status = (month_scheduled == 0 and current_paid > 0) or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
+        if current_paid > 0 and month_scheduled == 0:
+            month_payment_status=True
         # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
         reprogrammable_id=upcoming[0]["id"] if upcoming else None
         child_data.append({
@@ -1716,8 +1782,9 @@ def parent_home():
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
             "month_paid_classes":month_paid_classes, "month_attended":attended_count, "month_payment_status":month_payment_status,
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
-            "extra_count":extra_count, "recovery_pending":recovery_pending, "recovery_scheduled":recovery_scheduled,
-            "recovery_paid_scheduled":recovery_paid_scheduled, "recovery_paid":recovery_paid, "reprogrammable_id":reprogrammable_id,
+            "extra_count":pending_count, "recovery_pending":recovery_pending, "recovery_scheduled":recovery_scheduled,
+            "recovery_paid_scheduled":recovery_paid_scheduled, "recovery_paid":sum(1 for x in recovery_for_month if x["payment_status"]=='paid'),
+            "recovery_for_month":recovery_for_month, "reprogrammable_id":reprogrammable_id,
         })
     # In-app reminders: within 2 hours before the class, per child/class,
     # and persistently dismissed per parent account across devices.
@@ -1966,6 +2033,23 @@ def coach_reschedule(class_id):
     return render_template("reschedule.html",current=current,slots=[],coach_mode=True,now_date=datetime.now(PERU_TZ).date().isoformat(),shared_count=shared_count)
 
 
+@app.route("/entrenador/google-calendar/sincronizar", methods=["POST"])
+@coach_required
+def google_calendar_sync_all():
+    c=db()
+    ids=c.execute("SELECT id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
+    c.close()
+    ok=0; failed=0
+    for item in ids:
+        success, _ = sync_class_to_google(item["id"])
+        if success: ok += 1
+        else: failed += 1
+    if failed:
+        flash(f"Sincronización terminada: {ok} clase(s) sincronizada(s) y {failed} con error. Revisa la conexión de Google Calendar.")
+    else:
+        flash(f"Sincronización terminada: {ok} clase(s) sincronizada(s) con Google Calendar.")
+    return redirect(url_for("google_calendar_settings"))
+
 @app.route("/entrenador/google-calendar")
 @coach_required
 def google_calendar_settings():
@@ -2031,9 +2115,15 @@ def google_calendar_callback():
         c=db()
         ids=c.execute("SELECT id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
         c.close()
+        ok=0; failed=0
         for item in ids:
-            sync_class_to_google(item["id"])
-        flash("Google Calendar conectado. Las clases programadas se sincronizarán.")
+            success, _ = sync_class_to_google(item["id"])
+            ok += 1 if success else 0
+            failed += 0 if success else 1
+        if failed:
+            flash(f"Google Calendar conectado. {ok} clase(s) sincronizada(s); {failed} quedaron pendientes de sincronización.")
+        else:
+            flash(f"Google Calendar conectado. {ok} clase(s) sincronizada(s) correctamente.")
     except Exception as exc:
         app.logger.exception("Google OAuth callback failed: %s",exc)
         flash("No se pudo conectar Google Calendar. Revisa las credenciales OAuth en Render.")
