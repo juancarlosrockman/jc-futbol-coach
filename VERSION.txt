@@ -1,1 +1,1 @@
-JC Futbol Coach v12.15.5 - reparación automática de recuperaciones existentes y clases compartidas
+JC Futbol Coach v12.15.6 - reparación robusta de recuperaciones existentes en clases compartidas

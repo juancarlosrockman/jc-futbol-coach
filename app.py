@@ -655,7 +655,8 @@ def repair_pending_recoveries(c, student_id=None):
     cancels the original class.
     """
     query="""SELECT id FROM classes WHERE student_id=%s
-        AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed')
+        AND (payment_id IS NULL OR payment_status='pending')
+        AND status IN ('scheduled','rescheduled','postponed')
         ORDER BY date,time,id"""
     rows=c.execute(query,(student_id,)).fetchall() if student_id is not None else []
     repaired=0
@@ -674,7 +675,7 @@ def repair_all_existing_recoveries(c):
     enforce the prior-month/source-payment rules.
     """
     rows=c.execute("""SELECT DISTINCT student_id FROM classes
-        WHERE payment_id IS NULL AND payment_status='pending'
+        WHERE (payment_id IS NULL OR payment_status='pending')
         AND status IN ('scheduled','rescheduled','postponed')
         AND date >= %s""", (datetime.now(PERU_TZ).date().isoformat(),)).fetchall()
     repaired=0

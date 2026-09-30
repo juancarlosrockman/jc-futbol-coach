@@ -1,4 +1,4 @@
-# JC Fútbol Coach v12.15.2
+# JC Fútbol Coach v12.15.6
 
 Base: v12.15.1.
 
@@ -36,3 +36,11 @@ No se han ejecutado pruebas contra la base real de Render. Antes de desplegar, v
 - La recuperación conserva el pago del período original y no consume el pago del mes nuevo.
 
 Después del deploy, revisar la ficha de Marianito. No registrar un pago adicional antes de verificar el resultado.
+
+
+## v12.15.6 — reparación robusta
+- Repara también una clase futura que ya existe pero conserva `payment_id` con estado pendiente.
+- Si la clase cancelada conserva explícitamente el pago original, esa relación tiene prioridad sobre el cálculo de capacidad.
+- No aumenta `sessions_total` ni crea pagos nuevos para una recuperación.
+- No crea una segunda clase: repara la fila de destino existente.
+- La reparación automática sigue limitada al período inmediatamente anterior para respetar la regla mensual.
