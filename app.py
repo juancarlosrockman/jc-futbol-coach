@@ -309,6 +309,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_source_class_id INTEGER")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_payment_id INTEGER")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_month TEXT")
     c.execute("UPDATE classes SET is_recovery=TRUE WHERE status='rescheduled' AND original_date IS NOT NULL AND is_recovery=FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
@@ -637,9 +638,9 @@ def attach_recovery_payment(c, class_id, source_class_id=None):
                 else:
                     continue
             c.execute("""UPDATE classes SET payment_id=%s,payment_status='paid',is_recovery=TRUE,
-                original_date=%s,original_time=%s,recovery_source_class_id=%s,
+                original_date=%s,original_time=%s,recovery_source_class_id=%s,recovery_month=%s,
                 notes=CASE WHEN COALESCE(notes,'')='' THEN 'Recuperación de un período anterior' ELSE notes END
-                WHERE id=%s""",(p["id"],src["date"],src["time"],src["id"],class_id))
+                WHERE id=%s""",(p["id"],src["date"],src["time"],src["id"],src_month,class_id))
             c.execute("""UPDATE classes SET recovery_payment_id=%s,
                 notes=CASE WHEN COALESCE(notes,'')='' THEN %s ELSE notes END
                 WHERE id=%s""",(p["id"],f"Recuperada en clase {class_id}",src["id"]))
@@ -1434,6 +1435,57 @@ def save_class_work(class_id):
     c.commit(); c.close()
     flash("Trabajo de la clase guardado.")
     return redirect(request.referrer or url_for("student_detail", sid=row["student_id"]))
+
+
+@app.route("/entrenador/clase/<int:class_id>/recuperacion", methods=["GET", "POST"])
+@coach_required
+def manual_recovery(class_id):
+    c=db()
+    row=c.execute("""SELECT classes.*, students.student_name, students.tariff
+        FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s""",(class_id,)).fetchone()
+    if not row:
+        c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    if row["status"] == "cancelled":
+        c.close(); flash("Una clase anulada no puede marcarse como recuperación. Usa una clase futura."); return redirect(url_for("student_detail",sid=row["student_id"]))
+    if row["payment_status"] == "paid" and row.get("is_recovery"):
+        c.close(); flash("Esta clase ya está registrada como recuperación pagada."); return redirect(url_for("student_detail",sid=row["student_id"]))
+    current_month=row["date"][:7]
+    payments=c.execute("""SELECT p.*,
+        (SELECT COUNT(*) FROM classes cc WHERE cc.payment_id=p.id AND cc.status<>'cancelled') AS used
+        FROM payments p WHERE p.student_id=%s AND p.status='paid'
+          AND p.month < %s AND p.payment_type IN ('regular','package_8')
+        ORDER BY p.month DESC,p.id DESC""",(row["student_id"],current_month)).fetchall()
+    options=[]
+    tariff=float(row["tariff"] or 0)
+    for p in payments:
+        cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0) or 8)
+        remaining=max(0,cap-int(p["used"] or 0))
+        options.append({"payment":p,"cap":cap,"used":int(p["used"] or 0),"remaining":remaining})
+    if request.method=="POST":
+        try: pid=int(request.form.get("payment_id",""))
+        except (TypeError,ValueError):
+            c.close(); flash("Selecciona un pago válido."); return redirect(url_for("manual_recovery",class_id=class_id))
+        chosen=c.execute("""SELECT p.*,
+            (SELECT COUNT(*) FROM classes cc WHERE cc.payment_id=p.id AND cc.status<>'cancelled') AS used
+            FROM payments p WHERE p.id=%s AND p.student_id=%s AND p.status='paid'
+              AND p.month < %s AND p.payment_type IN ('regular','package_8')""",(pid,row["student_id"],current_month)).fetchone()
+        if not chosen:
+            c.close(); flash("El pago seleccionado no es válido para esta recuperación."); return redirect(url_for("manual_recovery",class_id=class_id))
+        cap=int(chosen["sessions_total"] or ((float(chosen["amount"] or 0)//tariff) if tariff>0 else 0) or 8)
+        used=int(chosen["used"] or 0)
+        if used >= cap:
+            c.close(); flash("Ese pago ya tiene todas sus clases asignadas."); return redirect(url_for("manual_recovery",class_id=class_id))
+        recovery_month=chosen["month"]
+        c.execute("""UPDATE classes SET payment_id=%s,payment_status='paid',is_recovery=TRUE,
+            recovery_month=%s, original_date=NULL, original_time=NULL, recovery_source_class_id=NULL,
+            notes=CASE WHEN COALESCE(notes,'')='' THEN %s ELSE notes || ' · ' || %s END
+            WHERE id=%s AND status IN ('scheduled','rescheduled','postponed')""",
+            (pid,recovery_month,f"Recuperación excepcional autorizada por el coach · período {recovery_month}",f"Recuperación excepcional autorizada por el coach · período {recovery_month}",class_id))
+        c.commit(); c.close(); sync_class_to_google(class_id)
+        flash(f"Clase marcada como recuperación pagada del período {recovery_month}.")
+        return redirect(url_for("student_detail",sid=row["student_id"]))
+    c.close()
+    return render_template("manual_recovery.html",current=row,options=options)
 
 
 @app.route("/entrenador/clase/<int:class_id>/eliminar", methods=["POST"])
