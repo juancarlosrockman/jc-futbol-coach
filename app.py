@@ -307,6 +307,7 @@ def init_db():
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS is_recovery BOOLEAN NOT NULL DEFAULT FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS parent_reschedule_count INTEGER NOT NULL DEFAULT 0")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS work_notes TEXT")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_source_class_id INTEGER")
     c.execute("UPDATE classes SET is_recovery=TRUE WHERE status='rescheduled' AND original_date IS NOT NULL AND is_recovery=FALSE")
     c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS google_event_id TEXT")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
@@ -501,37 +502,106 @@ def current_week_bounds(ref=None):
 
 
 def sync_payment_status(c, student_id=None):
-    """Assign paid monthly payments or special 8-class packages to scheduled classes.
-    The payment amount determines the number of regular classes covered from the
-    student's own tariff. Extra classes can remain scheduled with payment pending.
+    """Link scheduled classes to the correct monthly payment.
+
+    Normal classes are covered only by the payment for their calendar month.
+    Recovery classes use the month/payment of their original class, so a
+    September recovery scheduled in October never consumes October's payment.
     """
     students=c.execute("SELECT id,tariff FROM students WHERE status='active'" + (" AND id=%s" if student_id else ""), ((student_id,) if student_id else ())).fetchall()
     for st in students:
         sid=st["id"]; tariff=float(st["tariff"] or 0)
-        # Preserve existing links and mark those classes paid.
         c.execute("UPDATE classes SET payment_status='paid' WHERE student_id=%s AND payment_id IS NOT NULL", (sid,))
-        regular=[]
-        for p in c.execute("SELECT id,month,amount,sessions_total FROM payments WHERE student_id=%s AND status='paid' AND payment_type='regular' ORDER BY id", (sid,)).fetchall():
-            capacity=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
-            regular.append({"id":p["id"],"month":p["month"],"remaining":max(0,capacity)})
-        packages=[]
-        for p in c.execute("SELECT id,sessions_total FROM payments WHERE student_id=%s AND status='paid' AND payment_type='package_8' ORDER BY id", (sid,)).fetchall():
+        payments=c.execute("SELECT id,month,amount,sessions_total,payment_type FROM payments WHERE student_id=%s AND status='paid' ORDER BY id", (sid,)).fetchall()
+        capacity={}
+        for p in payments:
+            if p["payment_type"]=='regular':
+                cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
+            else:
+                cap=int(p["sessions_total"] or 8)
             used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status<>'cancelled'", (p["id"],)).fetchone()["n"]
-            packages.append({"id":p["id"],"remaining":max(0,(p["sessions_total"] or 8)-used)})
-        pending=c.execute("SELECT id,date FROM classes WHERE student_id=%s AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id", (sid,)).fetchall()
+            capacity[p["id"]]={"payment":p,"remaining":max(0,cap-used)}
+
+        pending=c.execute("""SELECT id,date,original_date,is_recovery FROM classes
+            WHERE student_id=%s AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed')
+            ORDER BY date,time,id""", (sid,)).fetchall()
         for cl in pending:
-            month=cl["date"][:7]; linked=False
-            for p in regular:
-                if p["month"]==month and p["remaining"]>0:
-                    c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (p["id"],cl["id"]))
-                    p["remaining"]-=1; linked=True; break
-            if linked: continue
-            for p in packages:
-                if p["remaining"]>0:
-                    c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (p["id"],cl["id"]))
-                    p["remaining"]-=1; linked=True; break
-            if not linked:
+            payment_month=(cl["original_date"][:7] if cl.get("is_recovery") and cl.get("original_date") else cl["date"][:7])
+            candidates=[]
+            for info in capacity.values():
+                p=info["payment"]
+                if info["remaining"]<=0 or p["payment_type"]!='regular' or p["month"]!=payment_month:
+                    continue
+                candidates.append(info)
+            if not candidates and not cl.get("is_recovery"):
+                for info in capacity.values():
+                    p=info["payment"]
+                    if info["remaining"]>0 and p["payment_type"]=='package_8': candidates.append(info)
+            if candidates:
+                info=candidates[0]; pid=info["payment"]["id"]
+                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (pid,cl["id"]))
+                info["remaining"]-=1
+            else:
                 c.execute("UPDATE classes SET payment_status='pending' WHERE id=%s", (cl["id"],))
+
+
+def attach_recovery_payment(c, class_id, source_class_id=None):
+    """Attach a newly created/reassigned class to a prior month's paid class.
+
+    This is used when a coach places an existing student into a shared class in
+    the following month. It repairs the common case where the original class
+    was cancelled after the new shared class was created.
+    """
+    row=c.execute("SELECT * FROM classes WHERE id=%s", (class_id,)).fetchone()
+    if not row or row.get("payment_id") is not None:
+        return False
+    target_date=date.fromisoformat(row["date"])
+    candidates=[]
+    if source_class_id:
+        src=c.execute("SELECT * FROM classes WHERE id=%s AND student_id=%s AND status='cancelled'", (source_class_id,row["student_id"])).fetchone()
+        if src: candidates=[src]
+    if not candidates:
+        # Prefer a cancelled class from the immediately preceding month with
+        # the same weekday/time. This is deliberately conservative.
+        prev_month=(target_date.replace(day=1)-timedelta(days=1)).strftime('%Y-%m')
+        candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
+            AND date LIKE %s AND time=%s ORDER BY date DESC,id DESC""", (row["student_id"],prev_month+'%',row["time"])).fetchall()
+        if not candidates:
+            candidates=c.execute("""SELECT * FROM classes WHERE student_id=%s AND status='cancelled'
+                AND date LIKE %s ORDER BY date DESC,id DESC LIMIT 3""", (row["student_id"],prev_month+'%')).fetchall()
+    for src in candidates:
+        src_month=src["date"][:7]
+        payments=c.execute("""SELECT * FROM payments WHERE student_id=%s AND month=%s AND status='paid'
+            AND payment_type='regular' ORDER BY id DESC""", (row["student_id"],src_month)).fetchall()
+        for p in payments:
+            tariff=float(c.execute("SELECT tariff FROM students WHERE id=%s",(row["student_id"],)).fetchone()["tariff"] or 0)
+            cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
+            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status<>'cancelled'",(p["id"],)).fetchone()["n"]
+            if used < cap:
+                c.execute("""UPDATE classes SET payment_id=%s,payment_status='paid',is_recovery=TRUE,
+                    original_date=%s,original_time=%s,recovery_source_class_id=%s,notes=CASE WHEN COALESCE(notes,'')='' THEN 'Recuperación de un período anterior' ELSE notes END
+                    WHERE id=%s""",(p["id"],src["date"],src["time"],src["id"],class_id))
+                c.execute("UPDATE classes SET notes=CASE WHEN COALESCE(notes,'')='' THEN %s ELSE notes END WHERE id=%s",(f"Recuperada en clase {class_id}",src["id"]))
+                return True
+    return False
+
+
+def repair_pending_recoveries(c, student_id=None):
+    """Repair pending future classes that were created as replacements for a
+    cancelled class from the immediately preceding month.
+
+    This is intentionally conservative: only classes in a shared group are
+    considered, and attach_recovery_payment itself requires a cancelled source
+    class plus unused capacity in that source month's paid monthly payment.
+    """
+    query="""SELECT id FROM classes WHERE student_id=%s
+        AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed')
+        AND session_group_id IS NOT NULL ORDER BY date,time,id"""
+    rows=c.execute(query,(student_id,)).fetchall() if student_id is not None else []
+    repaired=0
+    for r in rows:
+        if attach_recovery_payment(c,r["id"]): repaired+=1
+    return repaired
 
 
 def _next_weekday_on_or_after(today, weekday):
@@ -1127,6 +1197,7 @@ def reset_parent_password(sid):
 @coach_required
 def student_detail(sid):
     c = db()
+    repair_pending_recoveries(c, sid)
     sync_payment_status(c, sid)
     c.commit(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
     if not s:
@@ -1173,6 +1244,11 @@ def add_student_to_shared_class(class_id):
     row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
         VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",
         (sid,current["date"],current["time"],student["mode"],student["place"],student["tariff"],current["date"],current["time"],"Clase compartida",group)).fetchone()
+    # If this new shared-class slot is actually a recovery for the student,
+    # preserve the original month's payment instead of treating it as a new
+    # payable class. This also repairs the manual workflow where the old class
+    # was cancelled after the shared class was created.
+    attach_recovery_payment(c,row["id"])
     sync_payment_status(c,sid)
     c.commit(); c.close(); sync_class_to_google(row["id"])
     flash(f"{student['student_name']} fue agregado a la clase compartida.")
@@ -1449,8 +1525,10 @@ def parent_home():
     if session.get("role") != "parent":
         return redirect(url_for("parent_login"))
     c=db(); user_id=session["user_id"]; today=datetime.now(PERU_TZ).date(); today_iso=today.isoformat()
-    sync_payment_status(c); c.commit()
     children=c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' ORDER BY student_name", (user_id,)).fetchall()
+    for _child in children:
+        repair_pending_recoveries(c, _child["id"])
+    sync_payment_status(c); c.commit()
     if not children:
         c.close(); flash("No hay alumnos asociados a esta cuenta."); return redirect(url_for("logout"))
     child_data=[]
@@ -1698,16 +1776,30 @@ def coach_reschedule(class_id):
         if conflict:
             same_group=bool(current.get("session_group_id") and conflict.get("session_group_id")==current.get("session_group_id"))
             same_student=conflict["student_id"]==current["student_id"]
+            # A coach may intentionally place an individual class into an
+            # existing class at the same time. That turns the destination into
+            # a Clase compartida instead of treating it as a scheduling error.
             if not (same_group or same_student):
-                c.close(); flash("Ese horario ya está ocupado por otra clase."); return redirect(url_for("coach_reschedule",class_id=class_id))
+                target_group=conflict.get("session_group_id") or str(uuid.uuid4())
+                c.execute("UPDATE classes SET session_group_id=%s WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled','postponed')",(target_group,new_date,new_time))
+                current_group_to_merge=target_group
+            else:
+                current_group_to_merge=conflict.get("session_group_id") or current.get("session_group_id")
+        else:
+            current_group_to_merge=None
         old_date,old_time=current["date"],current["time"]
         move_group=request.form.get("move_group") == "yes"
-        if move_group and current.get("session_group_id"):
+        if conflict and not (current.get("session_group_id") and conflict.get("session_group_id")==current.get("session_group_id")) and not move_group:
+            c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s),session_group_id=%s WHERE id=%s",(new_date,new_time,old_date,old_time,current_group_to_merge,class_id))
+            attach_recovery_payment(c,class_id)
+            sync_ids=[class_id]
+        elif move_group and current.get("session_group_id"):
             rows=c.execute("SELECT id FROM classes WHERE session_group_id=%s AND status IN ('scheduled','rescheduled','postponed')",(current["session_group_id"],)).fetchall()
             c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE session_group_id=%s AND status IN ('scheduled','rescheduled','postponed')",(new_date,new_time,old_date,old_time,current["session_group_id"]))
             sync_ids=[r["id"] for r in rows]
         else:
             c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+            attach_recovery_payment(c,class_id)
             sync_ids=[class_id]
         c.commit(); c.close()
         for sync_id in sync_ids: sync_class_to_google(sync_id)

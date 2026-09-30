@@ -1,1 +1,1 @@
-JC Futbol Coach v12.15.0 - clases compartidas, recuperaciones mensuales y UX padre
+JC Futbol Coach v12.15.1 - clases compartidas, recuperaciones con pago original y reprogramación compartida
