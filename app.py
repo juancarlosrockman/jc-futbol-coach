@@ -1692,13 +1692,20 @@ def parent_home():
         attended_count=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND status='attended' AND date LIKE %s AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
         month_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
         month_paid_classes=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND payment_status='paid' AND status<>'cancelled' AND is_recovery=FALSE", (s["id"],current_month+'%')).fetchone()["n"]
-        recovery_pending=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
+        # A recovery scheduled in a later month still belongs to the original
+        # paid period. It must therefore be visible in the student's overall
+        # scheduled/paid counts, without being counted as an October package
+        # class or consuming the October payment.
+        recovery_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
+        recovery_paid_scheduled=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND payment_status='paid' AND status IN ('scheduled','rescheduled','postponed')", (s["id"],)).fetchone()["n"]
+        recovery_pending=recovery_scheduled
         recovery_paid=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND is_recovery=TRUE AND payment_status='paid'", (s["id"],)).fetchone()["n"]
         # Monthly package view: normal classes belong to the current payment period;
-        # an authorized recovery is shown separately and keeps the payment attached
-        # to its original class instead of consuming the next month's package.
-        scheduled_count=month_scheduled
-        paid_count=month_paid_classes
+        # a scheduled recovery from a previous period is displayed alongside them
+        # because it is a paid, already-agendated class, but it does not consume
+        # the current month's package.
+        scheduled_count=month_scheduled + recovery_scheduled
+        paid_count=month_paid_classes + recovery_paid_scheduled
         pending_count=max(0, month_scheduled-month_paid_classes)
         month_payment_status = current_paid > 0 or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
         extra_count=max(0, scheduled_count-paid_count)
@@ -1709,7 +1716,8 @@ def parent_home():
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
             "month_paid_classes":month_paid_classes, "month_attended":attended_count, "month_payment_status":month_payment_status,
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
-            "extra_count":extra_count, "recovery_pending":recovery_pending, "recovery_paid":recovery_paid, "reprogrammable_id":reprogrammable_id,
+            "extra_count":extra_count, "recovery_pending":recovery_pending, "recovery_scheduled":recovery_scheduled,
+            "recovery_paid_scheduled":recovery_paid_scheduled, "recovery_paid":recovery_paid, "reprogrammable_id":reprogrammable_id,
         })
     # In-app reminders: within 2 hours before the class, per child/class,
     # and persistently dismissed per parent account across devices.
