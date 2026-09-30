@@ -66,6 +66,9 @@
   {% if child.pending_count > 0 %}
   <div class="notice" style="margin-top:10px">⚠️ Tienes <b>{{child.pending_count}} clase(s)</b> agendada(s) aún no cubiertas por un pago registrado. Coach Juan Carlos puede haberlas dejado programadas como adicionales.</div>
   {% endif %}
+  {% if child.recovery_pending > 0 %}
+  <div class="notice" style="margin-top:10px"><b>↻ Recuperación pendiente</b><br>{{child.recovery_pending}} clase(s) de un período anterior ya pagado. Estas recuperaciones no se descuentan del pago del mes actual.</div>
+  {% endif %}
 
   <div class="card classes-section">
     <div class="row"><h2 class="section-title">Mis clases</h2><span class="pill light">{{child.scheduled_count}} agendadas</span></div>
@@ -73,7 +76,7 @@
     <div class="tabs"><button type="button" class="tab active" onclick="showTab({{loop.index0}},'next',this)">Próximas</button><button type="button" class="tab" onclick="showTab({{loop.index0}},'history',this)">Historial</button></div>
     <div class="tab-panel" data-tab="next">
       {% for x in child.upcoming %}
-      <div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span><span>{{child.student.zone or ''}}</span>{% if x.id==child.reprogrammable_id %}<a class="btn light" style="margin-top:6px;padding:7px 9px;font-size:11px" href="{{url_for('reschedule',class_id=x.id)}}">↻ Reprogramar</a>{% endif %}</div><span class="pill {% if x.payment_status=='paid' %}ok{% else %}warn{% endif %}">{{'Pagada' if x.payment_status=='paid' else 'Pendiente'}}</span></div>
+      <div class="class-item"><div class="datebox"><small>{{display_day(x.date)[:3]|upper}}</small><b>{{display_date(x.date).split('/')[0]}}</b></div><div class="class-main"><b>{{display_time(x.time)}}</b><span>{{x.place or child.student.place or 'Lugar por indicar'}}</span><span>{{child.student.zone or ''}}</span>{% if x.is_recovery %}<span class="pill blue" style="margin-top:5px">Recuperación de un período anterior</span>{% endif %}{% if x.id==child.reprogrammable_id %}<a class="btn light" style="margin-top:6px;padding:7px 9px;font-size:11px" href="{{url_for('reschedule',class_id=x.id)}}">↻ Reprogramar</a>{% endif %}</div><span class="pill {% if x.payment_status=='paid' %}ok{% else %}warn{% endif %}">{{'Pagada' if x.payment_status=='paid' else 'Pendiente'}}</span></div>
       {% else %}<p class="muted">No tienes próximas clases registradas.</p>{% endfor %}
     </div>
     <div class="tab-panel" data-tab="history" style="display:none">
@@ -92,7 +95,7 @@
       <hr style="border:0;border-top:1px solid var(--line)">
       <div class="small muted">Total pagado este mes</div>
       <div class="pay-total">S/ {{child.current_paid|int}}</div>
-      
+      {% if child.recovery_pending > 0 %}<div class="notice" style="margin-top:10px"><b>Recuperación de un período anterior</b><br>{{child.recovery_pending}} pendiente(s). Ya está(n) cubierta(s) por su pago original y no consume(n) las clases del mes actual.</div>{% endif %}
     </div>
     <h3 style="margin:18px 0 8px">Historial de pagos</h3>
     {% for p in child.payments %}<div class="stat" style="margin-top:8px"><div class="row"><b>{{p.month}}</b><span class="pill ok">{{'Pagado' if p.status=='paid' else 'Pendiente'}}</span></div><b>S/ {{p.amount|int}}</b><div class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}}</div></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}
