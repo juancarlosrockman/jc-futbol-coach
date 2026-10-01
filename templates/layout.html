@@ -135,5 +135,9 @@ function installJCFC(){
 }
 window.addEventListener('load',syncInstallOption);
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));}
-document.addEventListener('submit',function(e){if(e.defaultPrevented)return;const f=e.target;if(!f||f.dataset.noLoading==='1')return;const o=document.getElementById('loadingOverlay');if(o)o.classList.add('show');f.querySelectorAll('button[type=submit],input[type=submit]').forEach(b=>{b.disabled=true});});
+function jcfcShowLoading(){const o=document.getElementById('loadingOverlay');if(o)o.classList.add('show');}
+function jcfcHideLoading(){const o=document.getElementById('loadingOverlay');if(o)o.classList.remove('show');}
+document.addEventListener('submit',function(e){if(e.defaultPrevented)return;const f=e.target;if(!f||f.dataset.noLoading==='1')return;jcfcShowLoading();f.querySelectorAll('button[type=submit],input[type=submit]').forEach(b=>{b.disabled=true});},true);
+document.addEventListener('click',function(e){const a=e.target.closest('a[href]');if(!a||e.defaultPrevented||a.dataset.noLoading==='1')return;if(a.target==='_blank'||a.hasAttribute('download'))return;const href=a.getAttribute('href')||'';if(!href||href.startsWith('#')||href.startsWith('javascript:'))return;jcfcShowLoading();},false);
+window.addEventListener('pageshow',jcfcHideLoading);
 </script></body></html>
