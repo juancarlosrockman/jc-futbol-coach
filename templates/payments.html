@@ -1,6 +1,34 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="top"><div><h1>Pagos</h1><p class="muted">Registra los pagos mensuales y controla qué clases quedan cubiertas.</p></div><div class="stat"><span class="muted">Total registrado</span><br><b>S/ {{paid|int}}</b></div></div>
+<div class="top">
+  <div><h1>Pagos</h1><p class="muted">Registra los pagos mensuales y controla qué clases quedan cubiertas.</p></div>
+  <div class="stat"><span class="muted">Total histórico</span><br><b>S/ {{'%.0f'|format(paid)}}</b></div>
+</div>
+
+<div class="card" style="background:linear-gradient(135deg,#083b25,#0b7c41);color:#fff;border:0">
+  <div class="row" style="align-items:flex-start;gap:14px">
+    <div><span style="opacity:.82">Ingresos de {{month_labels[current_month]}}</span><h2 style="font-size:34px;margin:5px 0 2px">S/ {{'%.0f'|format(monthly_totals.get(current_month,0))}}</h2><span style="opacity:.82">{{ 'Hoy' if selected_month==current_month else 'Mes actual' }}</span></div>
+    <div style="margin-left:auto;text-align:right"><span style="opacity:.82">Pagos</span><br><b style="font-size:22px">{{ month_rows|length if selected_month==current_month else (monthly_totals.get(current_month,0)>0)|int }}</b></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Ingresos por mes</h2>
+  <p class="small muted">Selecciona un mes para revisar cuánto ingresaste y qué pagos lo componen.</p>
+  <form method="get" style="margin-top:12px">
+    <label>Mes / período</label>
+    <select name="month" onchange="this.form.submit()">
+      {% for m in months %}<option value="{{m}}" {% if m==selected_month %}selected{% endif %}>{{month_labels[m]}}{% if m==current_month %} · Actual{% endif %}</option>{% endfor %}
+    </select>
+  </form>
+  <div class="stat" style="margin-top:12px"><span class="muted">Ingresos de {{month_labels[selected_month]}}</span><br><b style="font-size:25px">S/ {{'%.2f'|format(month_total)}}</b></div>
+  {% for m in months %}
+    {% if monthly_totals.get(m,0)>0 %}
+    <div class="row" style="padding:10px 0;border-bottom:1px solid var(--line)"><span>{{month_labels[m]}}</span><b>S/ {{'%.2f'|format(monthly_totals[m])}}</b></div>
+    {% endif %}
+  {% endfor %}
+</div>
+
 <div class="card">
   <h2>Registrar pago</h2>
   <p class="small muted">Cada alumno puede tener una tarifa distinta. El monto recibido determina cuántas clases cubre el pago mensual.</p>
@@ -14,7 +42,11 @@
     <button class="btn green">💾 Registrar pago</button>
   </form>
 </div>
-<div class="card"><h2>Historial de pagos</h2>{% for p in payments %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{p.student_name}}</b><span class="pill ok">Pagado</span></div><span class="muted">{{p.month}}</span><br><b>S/ {{p.amount|int}}</b><br><span class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}} · {{p.sessions_total or 1}} clase(s) cubiertas</span>{% if p.payment_type=='package_8' %}<br><span class="small muted">{{package_info[p.id][0]}} realizadas · {{package_info[p.id][1]}} disponibles</span>{% endif %}</div>{% else %}<p class="muted">No hay pagos.</p>{% endfor %}</div>
+
+<div class="card"><h2>Pagos de {{month_labels[selected_month]}}</h2>
+{% for p in month_rows %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{p.student_name}}</b><span class="pill ok">Pagado</span></div><span class="muted">{{p.month}}</span><br><b>S/ {{'%.2f'|format(p.amount)}}</b><br><span class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}} · {{p.sessions_total or 1}} clase(s) cubiertas</span>{% if p.payment_type=='package_8' %}<br><span class="small muted">{{package_info[p.id][0]}} realizadas · {{package_info[p.id][1]}} disponibles</span>{% endif %}</div>{% else %}<p class="muted">No hay pagos registrados para este mes.</p>{% endfor %}</div>
+
+<div class="card"><h2>Historial completo</h2>{% for p in payments %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{p.student_name}}</b><span class="pill ok">Pagado</span></div><span class="muted">{{month_labels.get(p.month,p.month)}}</span><br><b>S/ {{'%.2f'|format(p.amount)}}</b></div>{% endfor %}</div>
 <script>
 function setMonth(){const now=new Date();const m=String(now.getMonth()+1).padStart(2,'0');const v=now.getFullYear()+'-'+m;document.querySelectorAll('input[type=month]').forEach(x=>{if(!x.value)x.value=v})}
 function updateAmount(){const o=document.querySelector('#paymentStudent option:checked');const t=parseFloat(o?.dataset.tariff||0);const a=document.getElementById('amount');if(t)a.value=(t).toFixed(2)}
