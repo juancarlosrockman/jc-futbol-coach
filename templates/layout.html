@@ -99,8 +99,9 @@ body{background:#f5f8f6;color:var(--ink)}
   .public-request-card .wizard-actions .btn { padding:12px 8px; white-space:normal; }
 }
 
+.loading-overlay{display:none;position:fixed;inset:0;background:rgba(255,255,255,.72);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(2px)}.loading-overlay.show{display:flex}.loading-box{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 20px;box-shadow:0 10px 30px #0002;font-weight:800;color:#18382a}.loading-spinner{display:inline-block;width:18px;height:18px;border:3px solid #d9e9df;border-top-color:var(--g);border-radius:50%;animation:jcspin .8s linear infinite;vertical-align:-4px;margin-right:8px}@keyframes jcspin{to{transform:rotate(360deg)}}
 </style></head>
-<body class="{% if request.endpoint=='home' %}home-page{% endif %}">
+<body class="{% if request.endpoint=='home' %}home-page{% endif %}"><div id="loadingOverlay" class="loading-overlay"><div class="loading-box"><span class="loading-spinner"></span>Procesando…</div></div>
 {% with messages=get_flashed_messages() %}{% for m in messages %}<div class="wrap" style="padding-bottom:0"><div class="flash">{{m}}</div></div>{% endfor %}{% endwith %}
 {% block shell_header %}{% endblock %}
 <div class="wrap {% if session.get('role')=='coach' %}wide{% endif %}">{% block content %}{% endblock %}</div>
@@ -134,4 +135,5 @@ function installJCFC(){
 }
 window.addEventListener('load',syncInstallOption);
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));}
+document.addEventListener('submit',function(e){if(e.defaultPrevented)return;const f=e.target;if(!f||f.dataset.noLoading==='1')return;const o=document.getElementById('loadingOverlay');if(o)o.classList.add('show');f.querySelectorAll('button[type=submit],input[type=submit]').forEach(b=>{b.disabled=true});});
 </script></body></html>

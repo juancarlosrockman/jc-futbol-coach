@@ -114,7 +114,7 @@
       <div class="pay-total">S/ {{child.current_paid|int}}</div>
       {% if child.recovery_pending > 0 %}<div class="notice" style="margin-top:10px"><b>Recuperación agendada de un período anterior</b><br>{{child.recovery_pending}} clase(s) ya están agendadas y cubiertas por su pago original. No consumen las clases del mes actual.</div>{% endif %}
     </div>
-    <h3 style="margin:18px 0 8px">Historial de pagos</h3>
+    <h3 style="margin:18px 0 8px">Pago del mes actual</h3>
     {% for p in child.payments %}<div class="stat" style="margin-top:8px"><div class="row"><b>{{p.month}}</b><span class="pill ok">{{'Pagado' if p.status=='paid' else 'Pendiente'}}</span></div><b>S/ {{p.amount|int}}</b><div class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}}</div></div>{% else %}<p class="muted">No hay pagos registrados.</p>{% endfor %}
   </div>
 </section>
