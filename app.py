@@ -138,8 +138,12 @@ def _ensure_google_calendar(c, setting):
 
 def _calendar_event_payload(row):
     start_dt = parse_iso_datetime(row["date"], row["time"])
-    # Default class duration 60 minutes; retain existing business logic and data.
-    end_dt = start_dt + timedelta(minutes=60)
+    try:
+        age = int(row.get("student_age") or 6)
+    except (TypeError, ValueError):
+        age = 6
+    duration = 30 if age <= 3 else (45 if age <= 5 else 60)
+    end_dt = start_dt + timedelta(minutes=duration)
     student = row.get("student_name") or "Alumno"
     place = row.get("place") or row.get("student_zone") or "Por confirmar"
     mode = row.get("mode") or "Entrenamiento"
@@ -179,7 +183,7 @@ def sync_class_to_google(class_id, delete=False):
             c.execute("UPDATE classes SET google_sync_status='not_connected',google_sync_error=%s WHERE id=%s", ("Google Calendar no está conectado.", class_id))
             c.commit()
             return False, "Google Calendar no está conectado."
-        row = c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone
+        row = c.execute("""SELECT classes.*,students.student_name,students.age AS student_age,students.zone AS student_zone
             FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s""", (class_id,)).fetchone()
         if not row:
             return False, "Clase no encontrada."
@@ -354,6 +358,14 @@ def init_db():
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT NOT NULL DEFAULT 'regular'")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS sessions_total INTEGER NOT NULL DEFAULT 1")
     c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
+    c.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS applied_tariff DOUBLE PRECISION")
+    c.execute("ALTER TABLE classes ADD COLUMN IF NOT EXISTS recovery_slot_id INTEGER")
+    c.execute("""CREATE TABLE IF NOT EXISTS recovery_slots(
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        date TEXT NOT NULL, time TEXT NOT NULL, zone TEXT NOT NULL, place TEXT NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_recovery_slots_date_time ON recovery_slots(date,time,active)")
     c.execute("ALTER TABLE availability ADD COLUMN IF NOT EXISTS turn TEXT NOT NULL DEFAULT 'Tarde / noche'")
     c.execute("UPDATE availability SET turn=CASE WHEN CAST(SPLIT_PART(time, ':', 1) AS INTEGER) < 12 THEN 'Mañana' ELSE 'Tarde / noche' END")
     c.execute("CREATE INDEX IF NOT EXISTS idx_classes_student_date ON classes(student_id,date,time)")
@@ -811,6 +823,12 @@ def reschedule_slots(c, current, today):
             seen.add(key)
             x["zone"] = zone
             slots.append(x)
+    for x in c.execute("SELECT id,date,time,zone,place FROM recovery_slots WHERE active=TRUE AND date>=%s AND zone=%s ORDER BY date,time,id", (today.isoformat(), zone)).fetchall():
+        key=(x["date"],x["time"])
+        if key in seen or (x["date"]==current["date"] and x["time"]==current["time"]): continue
+        occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled','postponed') AND id<>%s LIMIT 1",(x["date"],x["time"],current["id"])).fetchone()
+        if not occupied:
+            seen.add(key); slots.append({"date":x["date"],"day":DAYS[date.fromisoformat(x["date"]).weekday()],"time":x["time"],"zone":x["zone"],"place":x["place"],"kind":"manual_recovery","recovery_slot_id":x["id"]})
     slots.sort(key=lambda x: (x["date"], x["time"]))
     return slots
 
@@ -1242,12 +1260,14 @@ def save_optional_payment(c, sid, form, created_ids):
             raise ValueError("payment_amount")
         tariff_row = c.execute("SELECT tariff FROM students WHERE id=%s", (sid,)).fetchone()
         tariff = float(tariff_row["tariff"] or 0) if tariff_row else 0
-        total = int(amount // tariff) if tariff > 0 else 0
+        try: applied_tariff=float(form.get("payment_tariff") or tariff)
+        except (TypeError,ValueError): applied_tariff=tariff
+        total = int(amount // applied_tariff) if applied_tariff > 0 else 0
         if total < 1:
             raise ValueError("payment_amount")
-    pid = c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
-        VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s) RETURNING id""",
-        (sid, month, amount, method, form.get("payment_note", ""), ptype, total, datetime.now(PERU_TZ))).fetchone()["id"]
+    pid = c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at,applied_tariff)
+        VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s,%s) RETURNING id""",
+        (sid, month, amount, method, form.get("payment_note", ""), ptype, total, datetime.now(PERU_TZ), applied_tariff if ptype=='regular' else 75.0)).fetchone()["id"]
     if created_ids:
         if ptype == "package_8":
             ids = created_ids[:total]
@@ -1606,13 +1626,16 @@ def payments():
         payment_month=request.form.get("month") or request.form.get("package_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
         tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
         tariff=float(tariff_row["tariff"] or 0) if tariff_row else 0
-        if ptype=="package_8": amount=600.0; total=8
+        applied_tariff=tariff
+        if ptype=="package_8": amount=600.0; total=8; applied_tariff=75.0
         else:
-            if amount<=0 or tariff<=0: c.close(); flash("El monto debe cubrir al menos una clase según la tarifa del alumno."); return redirect(url_for("payments"))
-            total=int(amount//tariff)
-            if total<1: c.close(); flash("El monto debe cubrir al menos una clase según la tarifa del alumno."); return redirect(url_for("payments"))
-        pid=c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at)
-            VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s) RETURNING id""",(sid,payment_month,amount,request.form.get("method"),request.form.get("note",""),ptype,total,datetime.now(PERU_TZ))).fetchone()["id"]
+            try: applied_tariff=float(request.form.get("applied_tariff") or tariff)
+            except (TypeError,ValueError): applied_tariff=tariff
+            if amount<=0 or applied_tariff<=0: c.close(); flash("El monto y la tarifa aplicada deben ser válidos."); return redirect(url_for("payments"))
+            total=int(amount//applied_tariff)
+            if total<1: c.close(); flash("El monto no cubre al menos una clase con la tarifa aplicada."); return redirect(url_for("payments"))
+        pid=c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at,applied_tariff)
+            VALUES(%s,%s,%s,%s,'paid',%s,%s,%s,%s,%s) RETURNING id""",(sid,payment_month,amount,request.form.get("method"),request.form.get("note",""),ptype,total,datetime.now(PERU_TZ),applied_tariff)).fetchone()["id"]
         c.commit(); sync_payment_status(c); c.commit(); flash(f"Pago registrado correctamente. Cubre {total} clase(s).")
         c.close(); return redirect(url_for("payments"))
     rows=c.execute("SELECT payments.*,students.student_name FROM payments LEFT JOIN students ON students.id=payments.student_id ORDER BY payments.month DESC,payments.id DESC").fetchall()
@@ -1627,6 +1650,11 @@ def payments():
     selected_month=request.args.get("month") or current_month
     month_rows=[r for r in rows if r["status"]=="paid" and r["month"]==selected_month]
     month_total=sum(float(r["amount"] or 0) for r in month_rows)
+    pending_by_student={}
+    for srow in students:
+        n=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'",(srow["id"],selected_month+'%')).fetchone()["n"]
+        if n: pending_by_student[srow["id"]]=n*float(srow["tariff"] or 0)
+    pending_total=sum(pending_by_student.values())
     monthly_totals=[]
     for r in rows:
         if r["status"]!='paid':
@@ -1642,7 +1670,7 @@ def payments():
     c.close()
     return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info),
         current_month=current_month,selected_month=selected_month,month_rows=month_rows,month_total=month_total,
-        monthly_totals=by_month,months=months,month_labels=month_labels)
+        monthly_totals=by_month,months=months,month_labels=month_labels,pending_total=pending_total,pending_by_student=pending_by_student)
 
 
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
@@ -1662,6 +1690,16 @@ def availability():
             if turn in TURN_ORDER:
                 c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(current_month,turn))
                 c.commit(); c.close(); flash(f"Agenda disponible nuevamente para {turn.lower()}."); return redirect(url_for("availability"))
+        if action == "add_recovery":
+            rdate=request.form.get("recovery_date","").strip(); rtime=request.form.get("recovery_time","").strip(); rzone=request.form.get("recovery_zone","").strip(); rplace=request.form.get("recovery_place","").strip()
+            try: datetime.strptime(rdate,"%Y-%m-%d"); datetime.strptime(rtime,"%H:%M")
+            except ValueError: c.close(); flash("Fecha y hora de recuperación no válidas."); return redirect(url_for("availability"))
+            if not rzone or not rplace: c.close(); flash("Completa zona y lugar del espacio de recuperación."); return redirect(url_for("availability"))
+            duplicate=c.execute("SELECT 1 FROM recovery_slots WHERE active=TRUE AND date=%s AND time=%s AND zone=%s",(rdate,rtime,rzone)).fetchone()
+            if duplicate: c.close(); flash("Ya existe ese espacio de recuperación."); return redirect(url_for("availability"))
+            c.execute("INSERT INTO recovery_slots(date,time,zone,place,active) VALUES(%s,%s,%s,%s,TRUE)",(rdate,rtime,rzone,rplace)); c.commit(); c.close(); flash("Espacio de recuperación publicado."); return redirect(url_for("availability"))
+        if action == "delete_recovery":
+            rid=request.form.get("recovery_id",type=int); c.execute("UPDATE recovery_slots SET active=FALSE WHERE id=%s",(rid,)); c.commit(); c.close(); flash("Espacio de recuperación eliminado."); return redirect(url_for("availability"))
         zone=request.form.get("zone","").strip(); day=request.form.get("day","").strip(); time=request.form.get("time","").strip()
         turn=request.form.get("turn","").strip() or turn_for_time(time)
         if not zone or not day or not time: c.close(); flash("Completa zona, día y hora."); return redirect(url_for("availability"))
@@ -1688,8 +1726,9 @@ def availability():
             seen.add(key)
             recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':x['date'],'day':x['day'],'time':x['time']})
     recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
+    manual_recovery=c.execute("SELECT * FROM recovery_slots WHERE active=TRUE AND date>=%s ORDER BY date,time,id",(today.isoformat(),)).fetchall()
     c.close()
-    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,agenda_status=status,current_month=current_month,recovery_slots=recovery)
+    return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,agenda_status=status,current_month=current_month,recovery_slots=recovery,manual_recovery=manual_recovery)
 
 
 @app.route("/entrenador/disponibilidad/eliminar/<int:availability_id>", methods=["POST"])
@@ -1797,7 +1836,7 @@ def parent_home():
         # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
         reprogrammable_id=upcoming[0]["id"] if upcoming else None
         child_data.append({
-            "student":s, "upcoming":upcoming, "history":history, "payments":payments_rows,
+            "student":s, "upcoming":upcoming, "history":history, "payments":current_payments,
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
             "month_paid_classes":month_paid_classes, "month_attended":attended_count, "month_payment_status":month_payment_status,
             "scheduled_count":scheduled_count, "paid_count":paid_count, "pending_count":pending_count,
@@ -1975,7 +2014,9 @@ def reschedule(class_id):
         occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
         if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
         old_date=current["date"]; old_time=current["time"]
-        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',parent_reschedule_count=COALESCE(parent_reschedule_count,0)+1,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
+        selected_recovery_slot=next((x for x in available_slots if x["date"]==new_date and x["time"]==new_time and x.get("kind")=="manual_recovery"),None)
+        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',parent_reschedule_count=COALESCE(parent_reschedule_count,0)+1,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s),recovery_slot_id=%s WHERE id=%s",(new_date,new_time,old_date,old_time,selected_recovery_slot.get("recovery_slot_id") if selected_recovery_slot else None,class_id))
+        if selected_recovery_slot: c.execute("UPDATE recovery_slots SET active=FALSE WHERE id=%s",(selected_recovery_slot["recovery_slot_id"],))
         c.execute("""INSERT INTO coach_notifications(kind,class_id,student_id,title,message)
             VALUES(%s,%s,%s,%s,%s)""", (
                 "reschedule", class_id, current["student_id"], "Nueva reprogramación",
@@ -2043,6 +2084,10 @@ def coach_reschedule(class_id):
             c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',is_recovery=TRUE,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s) WHERE id=%s",(new_date,new_time,old_date,old_time,class_id))
             attach_recovery_payment(c,class_id)
             sync_ids=[class_id]
+        manual_slot=c.execute("SELECT id FROM recovery_slots WHERE active=TRUE AND date=%s AND time=%s LIMIT 1",(new_date,new_time)).fetchone()
+        if manual_slot:
+            c.execute("UPDATE recovery_slots SET active=FALSE WHERE id=%s",(manual_slot["id"],))
+            c.execute("UPDATE classes SET recovery_slot_id=%s WHERE id=ANY(%s)",(manual_slot["id"],sync_ids))
         c.commit(); c.close()
         for sync_id in sync_ids: sync_class_to_google(sync_id)
         flash(f"{'Clase compartida' if move_group and current.get('session_group_id') else 'Clase'} reprogramada para {display_date(new_date)} · {display_time(new_time)}.")
