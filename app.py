@@ -1622,8 +1622,27 @@ def payments():
         if p["payment_type"]=="package_8":
             used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'",(p["id"],)).fetchone()["n"]
             package_info.append((p["id"],used,max(0,(p["sessions_total"] or 8)-used)))
-    paid=sum(r["amount"] for r in rows if r["status"]=="paid"); c.close()
-    return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info))
+    paid=sum(float(r["amount"] or 0) for r in rows if r["status"]=="paid")
+    current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
+    selected_month=request.args.get("month") or current_month
+    month_rows=[r for r in rows if r["status"]=="paid" and r["month"]==selected_month]
+    month_total=sum(float(r["amount"] or 0) for r in month_rows)
+    monthly_totals=[]
+    for r in rows:
+        if r["status"]!='paid':
+            continue
+        monthly_totals.append((r["month"], float(r["amount"] or 0)))
+    by_month={}
+    for month, amount in monthly_totals:
+        by_month[month]=by_month.get(month,0)+amount
+    months=sorted(by_month.keys(), reverse=True)
+    if current_month not in months:
+        months.insert(0,current_month)
+    month_labels={m: datetime.strptime(m,"%Y-%m").strftime("%B de %Y").capitalize() for m in months}
+    c.close()
+    return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info),
+        current_month=current_month,selected_month=selected_month,month_rows=month_rows,month_total=month_total,
+        monthly_totals=by_month,months=months,month_labels=month_labels)
 
 
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
