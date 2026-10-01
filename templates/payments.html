@@ -31,7 +31,7 @@
 
 <div class="card">
   <h2>Registrar pago</h2>
-  <p class="small muted">Cada alumno puede tener una tarifa distinta. El monto recibido determina cuántas clases cubre el pago mensual.</p>
+  <p class="small muted">Puedes agendar primero aunque el padre todavía no haya pagado. Cuando recibas el dinero, registra aquí el pago; las clases pendientes del mismo mes quedarán cubiertas automáticamente. Puedes aplicar una tarifa especial solo para este pago.</p>
   <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Alumno</label><select name="student_id" id="paymentStudent" required>{% for s in students %}<option value="{{s.id}}" data-tariff="{{s.tariff}}">{{s.student_name}} · S/ {{s.tariff|int}} por clase</option>{% endfor %}</select>
     <label>Tipo de pago</label><select name="payment_type" id="ptype" onchange="changeType()"><option value="regular">Pago mensual</option><option value="package_8">Paquete especial de 8 clases — S/600</option></select>
@@ -44,7 +44,7 @@
 </div>
 
 <div class="card"><h2>Pagos de {{month_labels[selected_month]}}</h2>
-{% for p in month_rows %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{p.student_name}}</b><span class="pill ok">Pagado</span></div><span class="muted">{{p.month}}</span><br><b>S/ {{'%.2f'|format(p.amount)}}</b><br><span class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}} · {{p.sessions_total or 1}} clase(s) cubiertas</span>{% if p.payment_type=='package_8' %}<br><span class="small muted">{{package_info[p.id][0]}} realizadas · {{package_info[p.id][1]}} disponibles</span>{% endif %}</div>{% else %}<p class="muted">No hay pagos registrados para este mes.</p>{% endfor %}</div>
+{% for p in month_rows %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{p.student_name}}</b><span class="pill ok">Pagado</span></div><span class="muted">{{p.month}}</span><br><b>S/ {{'%.2f'|format(p.amount)}}</b><br><span class="small muted">{{'Paquete especial de 8 clases' if p.payment_type=='package_8' else 'Pago mensual'}} · {{p.sessions_total or 1}} clase(s) cubiertas{% if p.payment_type=='regular' and p.applied_tariff %} · S/ {{'%.2f'|format(p.applied_tariff)}} por clase{% endif %}{% if p.payment_type=='package_8' %}<br><span class="small muted">{{package_info[p.id][0]}} realizadas · {{package_info[p.id][1]}} disponibles</span>{% endif %}</div>{% else %}<p class="muted">No hay pagos registrados para este mes.</p>{% endfor %}</div>
 
 <div class="card"><h2>Por cobrar de {{month_labels[selected_month]}}</h2><p class="small muted">Son clases que ya están agendadas pero todavía no tienen un pago registrado.</p>{% for s in students if pending_by_student.get(s.id,0)>0 %}<div class="stat" style="margin:8px 0"><div class="row"><b>{{s.student_name}}</b><span class="pill warn">Pendiente</span></div><b>S/ {{'%.2f'|format(pending_by_student[s.id])}}</b></div>{% else %}<p class="muted">No hay clases pendientes de cobro en este mes.</p>{% endfor %}<div class="row" style="margin-top:12px"><b>Total por cobrar</b><b>S/ {{'%.2f'|format(pending_total)}}</b></div></div>
 <script>
