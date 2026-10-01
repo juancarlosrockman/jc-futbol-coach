@@ -1652,8 +1652,8 @@ def payments():
     month_total=sum(float(r["amount"] or 0) for r in month_rows)
     pending_by_student={}
     for srow in students:
-        n=c.execute("SELECT COUNT(*) AS n FROM classes WHERE student_id=%s AND date LIKE %s AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'",(srow["id"],selected_month+'%')).fetchone()["n"]
-        if n: pending_by_student[srow["id"]]=n*float(srow["tariff"] or 0)
+        pending_amount=c.execute("SELECT COALESCE(SUM(amount),0) AS total FROM classes WHERE student_id=%s AND date LIKE %s AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'",(srow["id"],selected_month+'%')).fetchone()["total"]
+        if float(pending_amount or 0)>0: pending_by_student[srow["id"]]=float(pending_amount or 0)
     pending_total=sum(pending_by_student.values())
     monthly_totals=[]
     for r in rows:
