@@ -53,7 +53,7 @@ SERVICES = [
 def db():
     if not DATABASE_URL:
         raise RuntimeError("Falta la variable de entorno DATABASE_URL.")
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, prepare_threshold=None)
 
 
 
@@ -457,7 +457,7 @@ def parent_presence_label(last_seen):
 
 @app.context_processor
 def inject_security_helpers():
-    return {"csrf_token": csrf_token, "parent_presence_label": parent_presence_label}
+    return {"csrf_token": csrf_token}
 
 
 @app.before_request
