@@ -624,7 +624,8 @@ def refresh_period_pricing(c, student_id, month):
         amounts=[unit if i<8 else break_tariff for i in range(len(rows))]
     else:
         amounts=[break_tariff]*len(rows)
-    c.executemany("UPDATE classes SET amount=%s WHERE id=%s",[(amounts[i],rows[i]["id"]) for i in range(len(rows))])
+    with c.connection.cursor() as cur:
+        cur.executemany("UPDATE classes SET amount=%s WHERE id=%s",[(amounts[i],rows[i]["id"]) for i in range(len(rows))])
 
 def refresh_all_active_period_pricing(c, student_id=None):
     students=c.execute("SELECT id FROM students WHERE status='active'"+(" AND id=%s" if student_id else ""),((student_id,) if student_id else ())).fetchall()
