@@ -1110,10 +1110,19 @@ def dashboard():
                 package_remaining -= 1
             else:
                 pending_payments += 1
+    current_month = datetime.now(PERU_TZ).strftime("%Y-%m")
+    month_income = c.execute("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status='paid' AND month=%s", (current_month,)).fetchone()["total"]
+    month_pending = c.execute("""SELECT COALESCE(SUM(amount),0) AS total FROM classes
+        WHERE date LIKE %s AND status IN ('scheduled','rescheduled','postponed')
+        AND payment_status <> 'paid'""", (current_month + '%',)).fetchone()["total"]
+    month_recoveries = c.execute("""SELECT COUNT(*) AS n FROM classes
+        WHERE date LIKE %s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')""", (current_month + '%',)).fetchone()["n"]
     teams = c.execute("SELECT * FROM teams WHERE date >= %s ORDER BY date,time LIMIT 10", (today,)).fetchall()
     c.close()
     return render_template("dashboard.html", students=students, classes=classes, today_classes=today_classes,
-                           wait_count=wait_count, pending_payments=pending_payments, teams=teams, notifications=notifications)
+                           wait_count=wait_count, pending_payments=pending_payments, teams=teams, notifications=notifications,
+                           current_month=current_month, month_income=float(month_income or 0),
+                           month_pending=float(month_pending or 0), month_recoveries=int(month_recoveries or 0))
 
 
 @app.route("/entrenador/alumnos")
@@ -1364,6 +1373,9 @@ def student_detail(sid):
         "attended": sum(1 for x in active_classes if x["status"]=='attended' and x["date"].startswith(current_month)),
         "pending": sum(1 for x in period_classes if x["payment_status"]!='paid'),
     }
+    current_paid = sum(float(p["amount"] or 0) for p in payments if p["status"]=='paid' and p["month"]==current_month)
+    current_pending = sum(float(x["amount"] or 0) for x in period_classes if x["payment_status"]!='paid')
+    current_recoveries = sum(1 for x in period_classes if x.get("is_recovery") and x["status"] in ('scheduled','rescheduled','postponed'))
     upcoming=[x for x in active_classes if x["date"]>=datetime.now(PERU_TZ).date().isoformat() and x["status"] in ('scheduled','rescheduled','postponed')]
     history=[x for x in active_classes if x["date"]<datetime.now(PERU_TZ).date().isoformat()]
     packages = []
@@ -1372,7 +1384,7 @@ def student_detail(sid):
             assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
             attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
             packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
-    c.close(); return render_template("student_detail.html", s=s, classes=classes, period_classes=period_classes, upcoming=upcoming, history=history, current_month=current_month, payments=payments, packages=packages, summary=summary, last_work=last_work)
+    c.close(); return render_template("student_detail.html", s=s, classes=classes, period_classes=period_classes, upcoming=upcoming, history=history, current_month=current_month, payments=payments, packages=packages, summary=summary, last_work=last_work, current_paid=current_paid, current_pending=current_pending, current_recoveries=current_recoveries)
 
 
 @app.route("/entrenador/clase/<int:class_id>/compartir", methods=["POST"])
