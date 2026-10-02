@@ -457,7 +457,7 @@ def parent_presence_label(last_seen):
 
 @app.context_processor
 def inject_security_helpers():
-    return {"csrf_token": csrf_token}
+    return {"csrf_token": csrf_token, "parent_presence_label": parent_presence_label}
 
 
 @app.before_request
