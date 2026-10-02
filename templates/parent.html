@@ -111,7 +111,7 @@
       {% if child.recovery_scheduled > 0 %}<div class="pay-stat"><span>Recuperaciones agendadas de períodos anteriores</span><b>{{child.recovery_scheduled}}</b></div>{% endif %}
       <hr style="border:0;border-top:1px solid var(--line)">
       <div class="small muted">Total pagado este mes</div>
-      <div class="pay-total">S/ {{child.current_paid|int}}</div>
+      <div class="pay-total">S/ {{child.current_paid|int}}</div>{% if child.pending_amount > 0 %}<div class="small muted" style="margin-top:8px">Por pagar</div><div class="pay-total">S/ {{child.pending_amount|int}}</div>{% endif %}
       {% if child.recovery_pending > 0 %}<div class="notice" style="margin-top:10px"><b>Recuperación agendada de un período anterior</b><br>{{child.recovery_pending}} clase(s) ya están agendadas y cubiertas por su pago original. No consumen las clases del mes actual.</div>{% endif %}
     </div>
     <h3 style="margin:18px 0 8px">Pago del mes actual</h3>
