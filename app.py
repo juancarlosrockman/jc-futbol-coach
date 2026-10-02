@@ -293,13 +293,32 @@ def init_db():
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP")
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS break_tariff DOUBLE PRECISION")
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS package_price DOUBLE PRECISION")
-    # Package metadata is separate from the student's habitual tariff. Legacy
-    # S/55 students keep S/55 but break the old S/440 package at S/60; current
-    # package students use S/600 and break at S/80.
+    # Package metadata is separate from the student's habitual tariff.
+    # Each student can have a different individual tariff. The package-break
+    # tariff therefore follows that student's own tariff, with the known
+    # legacy S/55 -> S/60 exception for Salvador/legacy students. Never use a
+    # global S/80 break tariff for every student.
     c.execute("""UPDATE students SET
-        break_tariff = CASE WHEN age >= 6 AND tariff = 55 THEN 60 WHEN age >= 6 THEN 80 ELSE tariff END,
-        package_price = CASE WHEN age >= 6 AND tariff = 55 THEN 440 WHEN age >= 6 THEN 600 ELSE NULL END
+        break_tariff = CASE
+            WHEN age >= 6 AND ABS(tariff - 55) < 0.01 THEN 60
+            WHEN age >= 6 THEN tariff
+            ELSE tariff
+        END,
+        package_price = CASE
+            WHEN age >= 6 AND ABS(tariff - 55) < 0.01 THEN 440
+            WHEN age >= 6 THEN 600
+            ELSE NULL
+        END
         WHERE break_tariff IS NULL OR package_price IS NULL""")
+    # Repair the incorrect S/80 default introduced by the previous pricing
+    # migration, but only where the student's own tariff is different.
+    c.execute("""UPDATE students SET break_tariff = CASE
+        WHEN age >= 6 AND ABS(tariff - 55) < 0.01 THEN 60
+        WHEN age >= 6 THEN tariff
+        ELSE tariff
+    END
+    WHERE age >= 6 AND ABS(COALESCE(break_tariff,0) - 80) < 0.01
+      AND ABS(tariff - 80) >= 0.01""")
     c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
     c.execute("""CREATE TABLE IF NOT EXISTS login_attempts(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1428,14 +1447,13 @@ def edit_student(sid):
                 temporary_password = "JC" + token_hex(3).upper()
                 user_id=c.execute("INSERT INTO users(role,name,whatsapp,password,dni) VALUES(%s,%s,%s,%s,%s) RETURNING id",("parent",parent_name,parent_whatsapp,hash_password(temporary_password),dni)).fetchone()["id"]
         try:
-            break_tariff=float(request.form.get("break_tariff") or tariff)
+            raw_break_tariff=request.form.get("break_tariff")
+            break_tariff=float(raw_break_tariff) if raw_break_tariff not in (None, "") else (60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else tariff)
         except (ValueError,TypeError):
-            break_tariff=tariff
+            break_tariff=60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else tariff
         if break_tariff <= 0:
-            break_tariff=tariff
+            break_tariff=60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else tariff
         package_price = 440.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (600.0 if age >= 6 else None)
-        if break_tariff <= 0:
-            break_tariff=60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (80.0 if age >= 6 else tariff)
         c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,break_tariff=%s,package_price=%s,photo_consent=%s WHERE id=%s""",
                   (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,break_tariff,package_price,request.form["photo_consent"],sid))
         c.commit(); c.close(); flash("Alumno actualizado correctamente."); return redirect(url_for("student_detail",sid=sid))
