@@ -292,25 +292,14 @@ def init_db():
         UNIQUE(month, turn))""")
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP")
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS break_tariff DOUBLE PRECISION")
-    # Existing students keep their habitual tariff, while the tariff used when
-    # an 8-class package is broken is stored separately. Legacy S/55 students
-    # correspond to the former S/440 package and use S/60 when the package is
-    # broken; current S/80 students use S/80 per class.
-    c.execute("UPDATE students SET break_tariff=CASE WHEN tariff=55 THEN 60 ELSE tariff END WHERE break_tariff IS NULL")
-    # Repair already-scheduled unpaid classes created before the per-period
-    # tariff field existed. If the current period has fewer than 8 classes,
-    # those classes are billed at the student's break-package tariff.
-    current_month = datetime.now(PERU_TZ).strftime("%Y-%m")
-    c.execute("""
-      UPDATE classes cl SET amount=COALESCE(st.break_tariff,st.tariff)
-      FROM students st
-      WHERE cl.student_id=st.id AND cl.date LIKE %s
-        AND cl.status IN ('scheduled','rescheduled','postponed')
-        AND cl.payment_status='pending'
-        AND (SELECT COUNT(*) FROM classes c2 WHERE c2.student_id=cl.student_id
-             AND c2.date LIKE %s AND c2.status IN ('scheduled','rescheduled','postponed')
-             AND c2.is_recovery=FALSE) BETWEEN 1 AND 7
-    """, (current_month+'%', current_month+'%'))
+    c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS package_price DOUBLE PRECISION")
+    # Package metadata is separate from the student's habitual tariff. Legacy
+    # S/55 students keep S/55 but break the old S/440 package at S/60; current
+    # package students use S/600 and break at S/80.
+    c.execute("""UPDATE students SET
+        break_tariff = CASE WHEN age >= 6 AND tariff = 55 THEN 60 WHEN age >= 6 THEN 80 ELSE tariff END,
+        package_price = CASE WHEN age >= 6 AND tariff = 55 THEN 440 WHEN age >= 6 THEN 600 ELSE NULL END
+        WHERE break_tariff IS NULL OR package_price IS NULL""")
     c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
     c.execute("""CREATE TABLE IF NOT EXISTS login_attempts(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -394,6 +383,7 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_payments_student_month ON payments(student_id,month,status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_role_whatsapp ON users(role,whatsapp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_availability_zone_turn ON availability(zone,turn,active)")
+    refresh_all_active_period_pricing(c)
     merge_duplicate_parent_accounts(c)
     migrate_plaintext_passwords(c)
 
@@ -610,6 +600,40 @@ def current_week_bounds(ref=None):
     saturday = monday + timedelta(days=5)
     return monday, saturday
 
+
+def get_package_terms(student_row):
+    age=int(student_row.get("age") or 0); tariff=float(student_row.get("tariff") or 0)
+    br=float(student_row.get("break_tariff") or 0); pp=student_row.get("package_price")
+    pp=float(pp) if pp is not None else 0.0
+    if age >= 6:
+        if abs(tariff-55) < 0.01:
+            return 440.0, br or 60.0
+        return pp or 600.0, br or 80.0
+    return 0.0, br or tariff
+
+def refresh_period_pricing(c, student_id, month):
+    student=c.execute("SELECT * FROM students WHERE id=%s",(student_id,)).fetchone()
+    if not student: return
+    package_price, break_tariff=get_package_terms(student)
+    rows=c.execute("""SELECT id FROM classes WHERE student_id=%s AND date LIKE %s
+        AND status IN ('scheduled','rescheduled','postponed') AND is_recovery=FALSE
+        AND payment_status<>'paid' ORDER BY date,time,id""",(student_id,month+'%')).fetchall()
+    if not rows: return
+    if package_price > 0 and len(rows) >= 8:
+        unit=package_price/8.0
+        amounts=[unit if i<8 else break_tariff for i in range(len(rows))]
+    else:
+        amounts=[break_tariff]*len(rows)
+    c.executemany("UPDATE classes SET amount=%s WHERE id=%s",[(amounts[i],rows[i]["id"]) for i in range(len(rows))])
+
+def refresh_all_active_period_pricing(c, student_id=None):
+    students=c.execute("SELECT id FROM students WHERE status='active'"+(" AND id=%s" if student_id else ""),((student_id,) if student_id else ())).fetchall()
+    for st in students:
+        months=c.execute("""SELECT DISTINCT LEFT(date,7) AS month FROM classes
+            WHERE student_id=%s AND status IN ('scheduled','rescheduled','postponed')
+              AND is_recovery=FALSE AND payment_status<>'paid'""",(st["id"],)).fetchall()
+        for m in months:
+            if m["month"]: refresh_period_pricing(c,st["id"],m["month"])
 
 def sync_payment_status(c, student_id=None):
     """Link scheduled classes to the correct monthly payment.
@@ -944,6 +968,7 @@ def globals():
         "display_day": display_day,
         "display_time": display_time,
         "class_status_label": class_status_label,
+        "parent_presence_label": parent_presence_label,
     }
 
 
@@ -1225,9 +1250,11 @@ def new_student():
                     ("parent", parent_name, parent_whatsapp, hash_password(parent_password), "")
                 ).fetchone()["id"]
                 password_notice = parent_password
-            sid = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,photo_consent)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,tariff,photo_consent)).fetchone()["id"]
+            package_price = 440.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (600.0 if age >= 6 else None)
+            break_tariff = 60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (80.0 if age >= 6 else tariff)
+            sid = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,package_price,photo_consent)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,package_price,photo_consent)).fetchone()["id"]
             created = save_class_groups(c, sid, tariff, request.form)
             payment_id = save_optional_payment(c, sid, request.form, created)
             c.commit()
@@ -1301,8 +1328,10 @@ def save_class_groups(c, sid, tariff, form):
             session_group_id=str(uuid.uuid4())
         notes=form.get(f"class_notes_{idx}","").strip()
         row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
-            VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,tariff,d,t,notes,session_group_id)).fetchone()
+            VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",(sid,d,t,mode,place,applied_tariff,d,t,notes,session_group_id)).fetchone()
         created.append(row["id"])
+    for month in sorted({form.get(f"class_date_{idx}","").strip()[:7] for idx in indexes if form.get(f"class_date_{idx}","").strip()}):
+        refresh_period_pricing(c,sid,month)
     return created
 
 
@@ -1331,8 +1360,17 @@ def save_optional_payment(c, sid, form, created_ids):
             raise ValueError("payment_amount")
         tariff_row = c.execute("SELECT tariff FROM students WHERE id=%s", (sid,)).fetchone()
         tariff = float(tariff_row["tariff"] or 0) if tariff_row else 0
-        try: applied_tariff=float(form.get("payment_tariff") or tariff)
-        except (TypeError,ValueError): applied_tariff=tariff
+        try: applied_tariff=float(form.get("payment_tariff") or 0)
+        except (TypeError,ValueError): applied_tariff=0
+        # When classes were already priced by the period rule, use that
+        # pricing if the received amount exactly matches the scheduled classes.
+        if created_ids:
+            class_rows=c.execute("SELECT id,amount,date FROM classes WHERE id=ANY(%s)",(created_ids,)).fetchall()
+            rates={round(float(r["amount"] or 0),2) for r in class_rows if float(r["amount"] or 0)>0}
+            class_total=sum(float(r["amount"] or 0) for r in class_rows if (r["date"] or "").startswith(month))
+            if len(rates)==1 and class_total>0 and abs(amount-class_total)<0.01:
+                applied_tariff=next(iter(rates))
+        if applied_tariff<=0: applied_tariff=tariff
         total = int(amount // applied_tariff) if applied_tariff > 0 else 0
         if total < 1:
             raise ValueError("payment_amount")
@@ -1394,8 +1432,11 @@ def edit_student(sid):
             break_tariff=tariff
         if break_tariff <= 0:
             break_tariff=tariff
-        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,break_tariff=%s,photo_consent=%s WHERE id=%s""",
-                  (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,break_tariff,request.form["photo_consent"],sid))
+        package_price = 440.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (600.0 if age >= 6 else None)
+        if break_tariff <= 0:
+            break_tariff=60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (80.0 if age >= 6 else tariff)
+        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,break_tariff=%s,package_price=%s,photo_consent=%s WHERE id=%s""",
+                  (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,break_tariff,package_price,request.form["photo_consent"],sid))
         c.commit(); c.close(); flash("Alumno actualizado correctamente."); return redirect(url_for("student_detail",sid=sid))
     c.close(); return render_template("edit_student.html",s=s)
 
@@ -1423,7 +1464,8 @@ def student_detail(sid):
     c = db()
     repair_pending_recoveries(c, sid)
     sync_payment_status(c, sid)
-    c.commit(); s = c.execute("SELECT * FROM students WHERE id=%s", (sid,)).fetchone()
+    c.commit(); s = c.execute("""SELECT students.*, users.last_seen_at AS parent_last_seen
+        FROM students LEFT JOIN users ON users.id=students.user_id WHERE students.id=%s""", (sid,)).fetchone()
     if not s:
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("students"))
     classes = c.execute("SELECT * FROM classes WHERE student_id=%s ORDER BY date DESC,time DESC,id DESC", (sid,)).fetchall()
@@ -1444,11 +1486,8 @@ def student_detail(sid):
     }
     current_paid = sum(float(p["amount"] or 0) for p in payments if p["status"]=='paid' and p["month"]==current_month)
     unpaid_period = [x for x in period_classes if x["payment_status"]!='paid']
-    break_tariff=float(s.get("break_tariff") or s.get("tariff") or 0)
-    # Fewer than 8 unpaid/active classes means the 8-class package is broken;
-    # the period is therefore valued at the student's break-package tariff.
-    expected_period = len(period_classes) * break_tariff if 0 < len(period_classes) < 8 else sum(float(x["amount"] or 0) for x in period_classes)
-    current_pending = max(0, expected_period - current_paid) if 0 < len(period_classes) < 8 else sum(float(x["amount"] or 0) for x in unpaid_period)
+    package_price, break_tariff = get_package_terms(s)
+    current_pending = sum(float(x["amount"] or 0) for x in unpaid_period)
     current_recoveries = sum(1 for x in period_classes if x.get("is_recovery") and x["status"] in ('scheduled','rescheduled','postponed'))
     today_iso=datetime.now(PERU_TZ).date().isoformat()
     # "Próximas" means every future class, regardless of payment status.
@@ -1713,8 +1752,10 @@ def payments():
         if not sid.isdigit():
             c.close(); flash("Alumno no encontrado."); return redirect(url_for("payments"))
         payment_month=request.form.get("month") or request.form.get("package_month") or datetime.now(PERU_TZ).strftime("%Y-%m")
-        tariff_row=c.execute("SELECT tariff FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
+        tariff_row=c.execute("SELECT * FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
         tariff=float(tariff_row["tariff"] or 0) if tariff_row else 0
+        if tariff_row:
+            refresh_period_pricing(c,sid,payment_month)
         applied_tariff=tariff
         if ptype=="package_8": amount=600.0; total=8; applied_tariff=75.0
         else:
@@ -1742,7 +1783,7 @@ def payments():
         if ptype == "regular":
             c.execute("""UPDATE classes SET amount=%s
                 WHERE student_id=%s AND date LIKE %s
-                  AND status IN ('scheduled','rescheduled','postponed')
+                  AND status<>'cancelled'
                   AND payment_status<>'paid' AND is_recovery=FALSE""",
                 (applied_tariff,sid,payment_month+'%'))
         pid=c.execute("""INSERT INTO payments(student_id,month,amount,method,status,note,payment_type,sessions_total,paid_at,applied_tariff)
@@ -1765,17 +1806,14 @@ def payments():
     pending_tariff_by_student={}
     pending_count_by_student={}
     for srow in students:
+        refresh_period_pricing(c,srow["id"],selected_month)
         pending_rows=c.execute("""SELECT amount FROM classes WHERE student_id=%s AND date LIKE %s
-            AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'
+            AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid' AND is_recovery=FALSE
             ORDER BY date,time,id""",(srow["id"],selected_month+'%')).fetchall()
+        pending_amount=sum(float(r["amount"] or 0) for r in pending_rows)
+        rates={round(float(r["amount"] or 0),2) for r in pending_rows if float(r["amount"] or 0)>0}
         break_tariff=float(srow.get("break_tariff") or srow["tariff"] or 0)
-        if 0 < len(pending_rows) < 8:
-            pending_amount=len(pending_rows) * break_tariff
-            pending_tariff_by_student[srow["id"]]=break_tariff
-        else:
-            pending_amount=sum(float(r["amount"] or 0) for r in pending_rows)
-            rates={round(float(r["amount"] or 0),2) for r in pending_rows if float(r["amount"] or 0)>0}
-            pending_tariff_by_student[srow["id"]]=next(iter(rates)) if len(rates)==1 else break_tariff
+        pending_tariff_by_student[srow["id"]]=next(iter(rates)) if len(rates)==1 else break_tariff
         if pending_amount>0:
             pending_by_student[srow["id"]]=pending_amount
             pending_count_by_student[srow["id"]]=len(pending_rows)
@@ -1922,6 +1960,7 @@ def parent_home():
     children=c.execute("SELECT * FROM students WHERE user_id=%s AND status='active' ORDER BY student_name", (user_id,)).fetchall()
     for _child in children:
         repair_pending_recoveries(c, _child["id"])
+        refresh_all_active_period_pricing(c,_child["id"])
     sync_payment_status(c); c.commit()
     if not children:
         c.close(); flash("No hay alumnos asociados a esta cuenta."); return redirect(url_for("logout"))
@@ -1956,9 +1995,9 @@ def parent_home():
         scheduled_count=month_scheduled + len(recovery_for_month)
         paid_count=month_paid_classes + sum(1 for x in recovery_for_month if x["payment_status"]=='paid')
         pending_count=max(0, month_scheduled-month_paid_classes)
-        break_tariff=float(s.get("break_tariff") or s.get("tariff") or 0)
-        expected_month=(month_scheduled * break_tariff if 0 < month_scheduled < 8 else sum(float(x["amount"] or 0) for x in upcoming if x["date"].startswith(current_month) and not x["is_recovery"]))
-        pending_amount=max(0, expected_month-current_paid) if 0 < month_scheduled < 8 else sum(float(x["amount"] or 0) for x in upcoming if x["date"].startswith(current_month) and not x["is_recovery"] and x["payment_status"]!='paid')
+        pending_amount=c.execute("""SELECT COALESCE(SUM(amount),0) AS total FROM classes
+            WHERE student_id=%s AND date LIKE %s AND status<>'cancelled'
+              AND is_recovery=FALSE AND payment_status<>'paid'""",(s["id"],current_month+'%')).fetchone()["total"] or 0
         month_payment_status = (month_scheduled == 0 and current_paid > 0) or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
         if current_paid > 0 and month_scheduled == 0:
             month_payment_status=True
