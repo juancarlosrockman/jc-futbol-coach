@@ -1202,6 +1202,16 @@ def new_student():
 
 def save_class_groups(c, sid, tariff, form):
     indexes=sorted({k.rsplit("_",1)[1] for k in form.keys() if k.startswith("class_date_")}, key=lambda x:int(x))
+    # The coach may reserve classes before receiving payment.  In that case
+    # the class itself must remember the tariff expected for that period so
+    # Payments can later calculate the correct amount without changing the
+    # student's normal tariff.
+    try:
+        applied_tariff=float(form.get("period_tariff") or tariff)
+    except (TypeError,ValueError):
+        applied_tariff=float(tariff or 0)
+    if applied_tariff <= 0:
+        raise ValueError("invalid_class")
     created=[]
     submitted=set()
     today=datetime.now(PERU_TZ).date()
@@ -1376,8 +1386,11 @@ def student_detail(sid):
     current_paid = sum(float(p["amount"] or 0) for p in payments if p["status"]=='paid' and p["month"]==current_month)
     current_pending = sum(float(x["amount"] or 0) for x in period_classes if x["payment_status"]!='paid')
     current_recoveries = sum(1 for x in period_classes if x.get("is_recovery") and x["status"] in ('scheduled','rescheduled','postponed'))
-    upcoming=[x for x in active_classes if x["date"]>=datetime.now(PERU_TZ).date().isoformat() and x["status"] in ('scheduled','rescheduled','postponed')]
-    history=[x for x in active_classes if x["date"]<datetime.now(PERU_TZ).date().isoformat()]
+    today_iso=datetime.now(PERU_TZ).date().isoformat()
+    # "Próximas" means every future class, regardless of payment status.
+    # "Este mes" is the complete current-month agenda, not just paid classes.
+    upcoming=sorted([x for x in active_classes if x["date"]>=today_iso and x["status"] in ('scheduled','rescheduled','postponed')], key=lambda x:(x["date"],x["time"],x["id"]))
+    history=sorted([x for x in active_classes if x["date"]<today_iso], key=lambda x:(x["date"],x["time"],x["id"]), reverse=True)
     packages = []
     for p in payments:
         if p["payment_type"] == "package_8":
@@ -1641,8 +1654,21 @@ def payments():
         applied_tariff=tariff
         if ptype=="package_8": amount=600.0; total=8; applied_tariff=75.0
         else:
-            try: applied_tariff=float(request.form.get("applied_tariff") or tariff)
-            except (TypeError,ValueError): applied_tariff=tariff
+            try: applied_tariff=float(request.form.get("applied_tariff") or 0)
+            except (TypeError,ValueError): applied_tariff=0
+            # If the coach is registering a payment after scheduling unpaid
+            # classes, reuse the tariff stored on those classes. This is what
+            # allows cases such as 7 x S/60 without changing the student's
+            # normal S/55 tariff.
+            if applied_tariff <= 0:
+                pending_rates=c.execute("""SELECT DISTINCT amount FROM classes
+                    WHERE student_id=%s AND date LIKE %s
+                    AND status IN ('scheduled','rescheduled','postponed')
+                    AND payment_status<>'paid' ORDER BY amount""", (sid,payment_month+'%')).fetchall()
+                if len(pending_rates)==1 and float(pending_rates[0]["amount"] or 0)>0:
+                    applied_tariff=float(pending_rates[0]["amount"])
+                else:
+                    applied_tariff=tariff
             if amount<=0 or applied_tariff<=0: c.close(); flash("El monto y la tarifa aplicada deben ser válidos."); return redirect(url_for("payments"))
             total=int(amount//applied_tariff)
             if total<1: c.close(); flash("El monto no cubre al menos una clase con la tarifa aplicada."); return redirect(url_for("payments"))
@@ -1663,9 +1689,18 @@ def payments():
     month_rows=[r for r in rows if r["status"]=="paid" and r["month"]==selected_month]
     month_total=sum(float(r["amount"] or 0) for r in month_rows)
     pending_by_student={}
+    pending_tariff_by_student={}
+    pending_count_by_student={}
     for srow in students:
-        pending_amount=c.execute("SELECT COALESCE(SUM(amount),0) AS total FROM classes WHERE student_id=%s AND date LIKE %s AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'",(srow["id"],selected_month+'%')).fetchone()["total"]
-        if float(pending_amount or 0)>0: pending_by_student[srow["id"]]=float(pending_amount or 0)
+        pending_rows=c.execute("""SELECT amount FROM classes WHERE student_id=%s AND date LIKE %s
+            AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid'
+            ORDER BY date,time,id""",(srow["id"],selected_month+'%')).fetchall()
+        pending_amount=sum(float(r["amount"] or 0) for r in pending_rows)
+        if pending_amount>0:
+            pending_by_student[srow["id"]]=pending_amount
+            pending_count_by_student[srow["id"]]=len(pending_rows)
+            rates={round(float(r["amount"] or 0),2) for r in pending_rows if float(r["amount"] or 0)>0}
+            pending_tariff_by_student[srow["id"]]=next(iter(rates)) if len(rates)==1 else float(srow["tariff"] or 0)
     pending_total=sum(pending_by_student.values())
     monthly_totals=[]
     for r in rows:
@@ -1682,7 +1717,8 @@ def payments():
     c.close()
     return render_template("payments.html",payments=rows,students=students,paid=paid,package_info=dict(package_info),
         current_month=current_month,selected_month=selected_month,month_rows=month_rows,month_total=month_total,
-        monthly_totals=by_month,months=months,month_labels=month_labels,pending_total=pending_total,pending_by_student=pending_by_student)
+        monthly_totals=by_month,months=months,month_labels=month_labels,pending_total=pending_total,pending_by_student=pending_by_student,
+        pending_tariff_by_student=pending_tariff_by_student,pending_count_by_student=pending_count_by_student)
 
 
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
@@ -1845,8 +1881,10 @@ def parent_home():
         month_payment_status = (month_scheduled == 0 and current_paid > 0) or (month_scheduled > 0 and month_paid_classes >= month_scheduled)
         if current_paid > 0 and month_scheduled == 0:
             month_payment_status=True
-        # Solo la siguiente clase queda habilitada para gestión directa del padre/madre.
-        reprogrammable_id=upcoming[0]["id"] if upcoming else None
+        # Solo la siguiente clase que aún no ha sido reprogramada queda
+        # habilitada para gestión directa del padre/madre. Una clase ya
+        # reprogramada nunca vuelve a ofrecer esta opción.
+        reprogrammable_id=next((x["id"] for x in upcoming if x["status"] in ("scheduled","postponed") and int(x.get("parent_reschedule_count") or 0)==0),None)
         child_data.append({
             "student":s, "upcoming":upcoming, "history":history, "payments":current_payments,
             "current_paid":current_paid, "current_month":current_month, "month_scheduled":month_scheduled,
@@ -1967,8 +2005,11 @@ def reschedule(class_id):
         ORDER BY classes.date,classes.time,classes.id LIMIT 1""",(current["student_id"],datetime.now(PERU_TZ).date().isoformat())).fetchone()
     if not next_class or next_class["id"]!=class_id:
         c.close(); flash("Esta no es la próxima clase de este alumno. La reprogramación directa corresponde a su próxima clase."); return redirect(url_for("parent_home"))
-    if current["status"] not in ("scheduled","rescheduled","postponed"):
-        c.close(); flash("Esta clase no está disponible para reprogramación directa."); return redirect(url_for("parent_home"))
+    # A parent gets one reprogramming opportunity. Once the class has been
+    # reprogrammed, it must not be offered again. The coach can still use the
+    # coach-side controls for exceptional changes.
+    if current["status"] not in ("scheduled","postponed") or int(current.get("parent_reschedule_count") or 0) > 0:
+        c.close(); flash("Esta clase ya fue reprogramada y no puede volver a reprogramarse desde la cuenta del padre/madre."); return redirect(url_for("parent_home"))
     try: original_dt=parse_iso_datetime(current["date"],current["time"])
     except ValueError: c.close(); flash("No se pudo validar la fecha."); return redirect(url_for("parent_home"))
     now=datetime.now(PERU_TZ)
