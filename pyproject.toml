@@ -1,3 +1,4 @@
+# Cloudflare deployment configuration
 [project]
 name = "jc-futbol-coach"
 version = "1.0.0"
