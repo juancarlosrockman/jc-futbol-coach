@@ -1,6 +1,6 @@
 import os
 
-from workers import WorkerEntrypoint, wsgi
+from workers import WorkerEntrypoint, Response, wsgi
 
 # Tell the Flask app that it is being loaded inside Cloudflare Workers.
 # This must be set before importing app.py so deployment-time snapshot creation
@@ -36,6 +36,12 @@ from app import app as _app
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
+                if request.url.endswith("/health"):
+            return Response(
+                "ok",
+                status=200,
+                headers={"content-type": "text/plain; charset=utf-8"}
+            )
         _configure_from_cloudflare(self.env)
         # The real Cloudflare secret must be applied before Flask handles the request.
         _app.secret_key = os.environ["SECRET_KEY"]
