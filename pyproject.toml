@@ -11,8 +11,3 @@ dependencies = [
     "cryptography>=46",
     "workers-py>=1.9",
 ]
-
-[dependency-groups]
-dev = [
-    "workers-runtime-sdk",
-]
