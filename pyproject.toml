@@ -9,5 +9,10 @@ dependencies = [
     "psycopg>=3.2,<4",
     "requests>=2.32,<3",
     "cryptography>=46",
-    "workers-py>=1.9",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py==1.17.7",
+    "workers-runtime-sdk",
 ]
