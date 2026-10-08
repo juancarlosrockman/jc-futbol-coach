@@ -36,7 +36,7 @@ from app import app as _app
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-                if request.url.endswith("/health"):
+        if request.url.endswith("/health"):
             return Response(
                 "ok",
                 status=200,
