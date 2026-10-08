@@ -3,7 +3,9 @@
   "name": "jc-futbol-coach",
   "main": "src/worker.py",
   "compatibility_date": "2026-10-07",
-  "compatibility_flags": ["python_workers"],
+  "compatibility_flags": [
+    "python_workers"
+  ],
   "keep_vars": true,
   "hyperdrive": [
     {
@@ -12,6 +14,13 @@
     }
   ],
   "python_modules": {
-    "exclude": ["**/*.pyc", "**/__pycache__"]
+    "exclude": [
+      "**/*.pyc",
+      "**/__pycache__"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
   }
 }
