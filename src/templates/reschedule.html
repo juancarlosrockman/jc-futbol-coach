@@ -1,0 +1,38 @@
+{% extends "layout.html" %}{% block content %}
+<a class="back" href="{{ url_for('student_detail', sid=current.student_id) if coach_mode else url_for('parent_home') }}">← {{ 'Volver a la ficha del alumno' if coach_mode else 'Volver' }}</a>
+<div class="card">
+  {% if coach_mode %}
+  <h1>Reprogramar clase</h1>
+  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Clase actual:</b> {{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Zona:</b> {{current.student_zone or 'Por indicar'}}</div>
+  <p class="muted">Como coach puedes elegir cualquier fecha y hora. Solo se bloquearán fechas pasadas y horarios ocupados por otra clase.</p>
+  <form method="post" style="margin-top:14px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="coach_date">Nueva fecha</label><input id="coach_date" type="date" name="date" min="{{ now_date }}" value="{{current.date}}" required>
+    <label for="coach_time">Nueva hora</label><input id="coach_time" type="time" name="time" value="{{current.time}}" required>
+    {% if shared_count and shared_count > 1 %}<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="move_group" value="yes" checked style="width:auto;margin:0"> Reprogramar toda la clase compartida ({{shared_count}} alumnos)</label><p class="small muted">Desmarca esta opción si quieres mover solo a este alumno.</p>{% endif %}<button class="btn green" style="width:100%;margin-top:14px" type="submit">Guardar reprogramación</button>
+  </form>
+  {% else %}
+  <div class="eyebrow">ALUMNO ACTUAL</div><h1>Reprogramar clase</h1>
+  <div class="notice"><b>Clase actual</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or 'Lugar por indicar'}}</div>
+  <div class="notice" style="margin-top:10px">
+    <b>🔄 Indicaciones para reprogramar</b><br><br>
+    • Puedes realizar una <b>primera reprogramación hasta 2 horas antes</b> del inicio de la clase.<br>
+    • En la <b>primera reprogramación</b>, se te mostrará la opción de pasar la clase al <b>siguiente mes</b>, según los horarios disponibles.<br>
+    • <b>A partir de la segunda reprogramación</b>, la clase deberá recuperarse <b>dentro del mismo mes</b>, coordinando con Coach Juan Carlos según los horarios disponibles.<br>
+    • Si no hubiera un horario disponible, <b>Coach Juan Carlos te informará si se libera un espacio</b>.<br>
+    • Si tienes una emergencia dentro de las 2 horas previas, comunícate directamente con <b>Coach Juan Carlos por WhatsApp</b>.<br>
+    • <b>Si Coach Juan Carlos ya se encuentra llegando al lugar de entrenamiento, la clase se considera programada y realizada.</b>
+  </div>
+  {% if slots %}
+  <h2 style="margin-top:18px">{% if reschedule_count == 0 %}Opciones para el siguiente mes{% else %}Opciones de recuperación para este mes{% endif %}</h2>
+  <form method="post" id="resForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="slot-list">{% for x in slots %}<label class="slot"><span><input type="radio" name="slot" value="{{x.date}}|{{x.time}}" onchange="pick('{{x.date}}','{{x.time}}')"> <b>{{x.day}} {{display_date(x.date)}}</b><br><small style="margin-left:23px">{{display_time(x.time)}} · {{x.turn}}{% if x.place %} · {{x.place}}{% endif %}</small></span></label>{% endfor %}</div>
+    <input type="hidden" name="date" id="date"><input type="hidden" name="time" id="time">
+    <button class="btn green" type="submit">Confirmar nueva fecha</button>
+  </form>
+  {% else %}
+  <div class="notice" style="margin-top:12px">No hay un espacio de recuperación disponible para esta reprogramación.</div>
+  <a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito coordinar la reprogramación de una clase.')}}">📲 Coordinar con Coach Juan Carlos</a>
+  {% endif %}
+</div><script>function pick(d,t){document.getElementById('date').value=d;document.getElementById('time').value=t}</script>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+{% block content %}
+<a class="back" href="{{url_for('student_detail',sid=current.student_id)}}">← Ficha del alumno</a>
+<div class="card">
+  <h1>Editar clase</h1>
+  <p class="muted">Corrige la fecha u hora de una clase ya agendada. Esta edición no cambia el pago ni la cantidad de clases.</p>
+  <div class="notice"><b>Alumno:</b> {{current.student_name}}<br><b>Horario actual:</b> {{display_date(current.date)}} · {{display_time(current.time)}}<br><b>Zona:</b> {{current.student_zone or 'Por indicar'}}</div>
+  <form method="post" style="margin-top:14px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Nueva fecha</label>
+    <input type="date" name="date" value="{{current.date}}" required>
+    <label>Nueva hora</label>
+    <input type="time" name="time" value="{{current.time}}" required>
+    <input type="hidden" name="return_to" value="{{return_to}}">
+    <button class="btn green" style="width:100%">💾 Guardar corrección</button>
+  </form>
+</div>
+{% if current.session_group_id %}
+<div class="card">
+  <h2>👥 Clase compartida</h2>
+  <p class="muted">Los alumnos de esta lista entrenan en el mismo horario. Cada uno conserva su propio pago y asistencia.</p>
+  {% for m in shared_members %}<div class="notice" style="margin:7px 0">{{m.student_name}} · {{m.age}} años</div>{% endfor %}
+  <form method="post" action="{{url_for('add_student_to_shared_class',class_id=current.id)}}">
+    <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+    <label>Agregar alumno registrado</label>
+    <select name="student_id" required><option value="">Escoge un alumno</option>{% for st in students %}<option value="{{st.id}}">{{st.student_name}} · {{st.age}} años</option>{% endfor %}</select>
+    <button class="btn green" type="submit">+ Agregar a clase compartida</button>
+  </form>
+</div>
+{% else %}
+<div class="card">
+  <h2>👥 Crear clase compartida</h2>
+  <p class="muted">Agrega otro alumno registrado al mismo día y horario.</p>
+  <form method="post" action="{{url_for('add_student_to_shared_class',class_id=current.id)}}">
+    <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+    <label>Alumno</label>
+    <select name="student_id" required><option value="">Escoge un alumno</option>{% for st in students %}<option value="{{st.id}}">{{st.student_name}} · {{st.age}} años</option>{% endfor %}</select>
+    <button class="btn green" type="submit">+ Crear clase compartida</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

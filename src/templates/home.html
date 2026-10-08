@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="public-hero">
+  <button class="home-menu-btn" aria-label="Abrir menú" onclick="document.getElementById('publicMenu').classList.add('open')"><span class="hamburger-lines"><i></i><i></i><i></i></span></button>
+  <div class="hero-content">
+    <img class="hero-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman Training">
+    <h1 class="hero-kicker">ENTRENAMIENTO<br>PERSONALIZADO<br>DE <span>FÚTBOL</span></h1>
+    <p class="hero-sub">Movimiento · Coordinación · Fundamentos</p>
+    <div class="feature-row"><div class="feature"><span class="ico">👥</span>Todas<br>las edades</div><div class="feature"><span class="ico">📍</span>En Lima</div><div class="feature"><span class="ico">⌂</span>Parques o<br>domicilio</div></div>
+    <div class="hero-coach-name">Coach Juan Carlos</div>
+    <div class="hero-credential"><span></span> ESTUDIOS FPF</div>
+    <a class="hero-btn primary" href="{{url_for('nuevo')}}"><span>♟ &nbsp; ¿Eres nuevo?<small style="display:block;font-weight:500;font-size:11px;margin-left:28px">Solicita tu entrenamiento</small></span><span>›</span></a>
+    <a class="hero-btn secondary" href="{{url_for('parent_login')}}"><span>▣ &nbsp; Alumno actual<small style="display:block;font-weight:500;font-size:11px;margin-left:28px;color:#69746e">Ingresa a tu cuenta</small></span><span>›</span></a>
+  </div>
+</div>
+<div class="drawer" id="publicMenu" onclick="if(event.target===this)this.classList.remove('open')"><div class="drawer-panel"><div class="drawer-close" onclick="document.getElementById('publicMenu').classList.remove('open')">×</div><img class="drawer-logo" src="{{url_for('static',filename='logo.jpg')}}" alt="Rockman"><a href="{{url_for('home')}}"><span class="menu-icon">⌂</span>Inicio</a><a href="{{url_for('nuevo')}}"><span class="menu-icon">⚽</span>Solicitar clase</a><a href="{{url_for('equipo')}}"><span class="menu-icon">★</span>Servicios</a><a href="{{url_for('espera')}}"><span class="menu-icon">◷</span>Lista de espera</a><button type="button" class="drawer-install" id="installMenuItem" onclick="installJCFC();event.stopPropagation()"><span class="menu-icon">📱</span>Agregar Futbol al celular</button><a href="{{url_for('coach_login')}}"><span class="menu-icon">⚙</span>Acceso Coach</a><div class="spacer"></div></div></div>
+{% endblock %}
