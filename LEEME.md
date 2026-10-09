@@ -1,11 +1,16 @@
-# Corrección del error 500 en Cloudflare — JC Fútbol Coach
+JC FUTBOL COACH — CORRECCIÓN DE CONTROLADOR POSTGRESQL PARA CLOUDFLARE
 
-## Qué corrige
-El log muestra `KeyError: 'SECRET_KEY'`: el Worker intenta leer `os.environ["SECRET_KEY"]` aunque la clave no está presente en el entorno Python. `src/worker.py` ahora obtiene la clave de los bindings de Cloudflare de forma segura y conserva el enrutamiento de assets que hizo volver a mostrar la foto.
+Incluye:
+- pyproject.toml con psycopg[binary], para incluir el wrapper PostgreSQL que faltaba (psycopg_binary).
+- src/worker.py conservando la corrección de SECRET_KEY y el servicio de archivos estáticos.
+- wrangler.jsonc con fecha de compatibilidad 2026-10-09 y la configuración existente de Hyperdrive y ASSETS.
 
-## Archivos incluidos
-- `src/worker.py`: corregido el manejo de `SECRET_KEY` y conservado el servicio de archivos estáticos.
-- `wrangler.jsonc`: conserva Hyperdrive y el binding de assets estáticos.
+IMPORTANTE PARA QUE FUNCIONE:
+Este paquete debe aplicarse al PROYECTO COMPLETO y desplegarse con el proceso de construcción de Python Workers (pywrangler/uv), que instala las dependencias declaradas en pyproject.toml. Subir solo src/worker.py al editor web no instala psycopg[binary] y no corrige el error `no pq wrapper available`.
 
-## Importante
-Sube este paquete por el mismo método que usaste para el ZIP anterior y despliega la nueva versión. No incluye ni cambia `src/app.py` ni datos de la base de datos. Después prueba el inicio de sesión de coach. Si aparece otro error, revisa el nuevo evento de Cloudflare; el siguiente error podría revelar una variable o conexión faltante.
+Comprobaciones posteriores al despliegue:
+1. Abrir la página principal y verificar la foto.
+2. Intentar iniciar sesión como coach.
+3. Si falla, revisar el evento más reciente en Cloudflare Observability.
+
+No elimina ni modifica tablas o datos de PostgreSQL.
