@@ -3,32 +3,18 @@
   "name": "jc-futbol-coach",
   "main": "src/worker.py",
   "compatibility_date": "2026-10-07",
-  "compatibility_flags": [
-    "python_workers"
-  ],
+  "compatibility_flags": ["python_workers"],
   "keep_vars": true,
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "8e39836a808241ab91d43b753b30025f"
-    }
-  ],
+  "hyperdrive": [{
+    "binding": "HYPERDRIVE",
+    "id": "8e39836a808241ab91d43b753b30025f"
+  }],
   "assets": {
     "directory": "./src/static",
     "binding": "ASSETS",
     "run_worker_first": true
   },
-  "python_modules": {
-    "exclude": [
-      "**/*.pyc",
-      "**/__pycache__"
-    ]
-  },
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
-  },
-  "vars": {
-    "CLOUDFLARE_WORKERS": "1"
-  }
+  "python_modules": {"exclude": ["**/*.pyc", "**/__pycache__"]},
+  "observability": {"enabled": true, "head_sampling_rate": 1},
+  "vars": {"CLOUDFLARE_WORKERS": "1"}
 }
