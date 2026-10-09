@@ -1,0 +1,16 @@
+JC FUTBOL COACH — PAQUETE COMPLETO PARA CLOUDFLARE
+
+Este ZIP contiene el proyecto completo, no un parche ni un script.
+
+CAMBIOS INCLUIDOS
+- Conserva las páginas, plantillas y archivos estáticos del proyecto base.
+- Mantiene la corrección de archivos estáticos y el manejo de SECRET_KEY.
+- Sustituye psycopg por pg8000 (Python puro) mediante src/db_compat.py para evitar el error de libpq en Cloudflare Workers.
+- El punto de entrada aplica las variables de entorno y la conexión de Hyperdrive.
+- En la primera solicitud dinámica de cada instancia inicializa/verifica el esquema y sincroniza el usuario entrenador con COACH_USER y COACH_PASSWORD.
+
+ANTES DE PUBLICAR EN CLOUDFLARE
+Verifica en Worker Settings que estén configurados los secretos/variables SECRET_KEY, COACH_USER y COACH_PASSWORD, y que Hyperdrive HYPERDRIVE apunte a la base de datos correcta. No compartas esos valores públicamente.
+
+IMPORTANTE
+El ZIP está preparado para cargar como proyecto. No puedo afirmar que el login ya esté funcionando en producción sin una nueva publicación y una prueba real del Worker y de la base de datos. Este paquete no modifica el repositorio main ni Render.

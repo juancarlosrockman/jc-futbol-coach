@@ -51,12 +51,12 @@ SERVICES = [
 
 
 def db():
-    import psycopg
-    from psycopg.rows import dict_row
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError("Falta la variable de entorno DATABASE_URL.")
-    return psycopg.connect(database_url, row_factory=dict_row, prepare_threshold=None)
+    # pg8000 is pure Python and works in Cloudflare Python Workers.
+    from db_compat import connect
+    return connect(database_url)
 
 
 

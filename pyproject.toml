@@ -1,11 +1,11 @@
 [project]
 name = "jc-futbol-coach"
-version = "1.0.1"
-description = "JC Futbol Coach web app running on Cloudflare Python Workers"
+version = "1.0.2"
+description = "JC Fútbol Coach web app running on Cloudflare Python Workers"
 requires-python = ">=3.12"
 dependencies = [
     "flask>=3.0,<4",
-    "psycopg[binary]>=3.2,<4",
+    "pg8000>=1.31,<2",
     "requests>=2.32,<3",
     "cryptography>=46",
 ]
