@@ -1,37 +1,21 @@
-# JC Fútbol Coach — corrección del Worker de Cloudflare
+# Corrección de archivos estáticos en Cloudflare — JC Fútbol Coach
 
-## Qué corrige este paquete
-- Reemplaza la respuesta de prueba `OK - Cloudflare Python funciona`.
-- Conecta la aplicación Flask existente mediante el adaptador WSGI oficial de Python Workers.
-- Aplica `SECRET_KEY` al objeto Flask para que las sesiones se firmen con el secreto real.
-- Obtiene `DATABASE_URL` de `HYPERDRIVE.connectionString`.
-- Expone las variables OAuth de Google al código existente.
-- No modifica la base de datos ni ejecuta `init_db()` al arrancar en Cloudflare.
-- No incluye credenciales ni modifica la rama `main` o Render.
+## Qué corrige
+- Publica `src/static` mediante el binding `ASSETS` de Cloudflare.
+- Conserva las URLs que ya usa la app: `/static/...` y `/manifest.webmanifest`.
+- Mantiene Flask/WSGI para las demás rutas.
+- No modifica `src/app.py`, las plantillas ni la base de datos.
 
-## Cómo aplicar
-1. Descarga y descomprime este ZIP.
-2. Copia `src/worker.py` sobre el archivo del mismo nombre en la raíz de tu proyecto `jc-futbol-coach` (rama `cloudflare-migration`).
-3. No reemplaces `src/app.py`, `src/templates/`, `src/static/`, `pyproject.toml` ni `wrangler.jsonc`.
-4. Despliega primero en el Worker de pruebas de Cloudflare, no en Render.
+## Aplicación
+1. En la rama `cloudflare-migration`, reemplaza `src/worker.py` por el incluido.
+2. Actualiza `wrangler.jsonc` con el incluido (conserva el mismo Hyperdrive ID y las variables existentes).
+3. Confirma que `src/static/jc_coach_photo.png` y `src/static/manifest.webmanifest` existan en esa rama.
+4. Despliega la rama experimental con `uv run pywrangler deploy`.
 
-## Configuración requerida en Cloudflare
-Deben existir estos bindings/secrets:
-- `SECRET_KEY` (secreto actual de la aplicación)
-- `HYPERDRIVE` (binding ya configurado hacia Supabase)
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI`
+## Pruebas obligatorias después del despliegue
+- `/manifest.webmanifest` debe devolver JSON y HTTP 200.
+- `/static/jc_coach_photo.png` debe devolver la imagen y HTTP 200.
+- La página `/` debe mostrar la foto.
+- Comprueba también login del entrenador, login de padres y carga de datos antes de considerar migración terminada.
 
-La URL de redirección de Google debe corresponder al dominio del Worker de prueba.
-
-## Verificación tras desplegar
-1. Abrir `/` y confirmar que aparece la página real, no el mensaje de prueba.
-2. Probar inicio de sesión del entrenador.
-3. Probar inicio de sesión de un padre.
-4. Comprobar una lectura de alumnos/horarios.
-5. Confirmar en logs si hay errores de CPU, conexión PostgreSQL o variables faltantes.
-6. No probar escrituras que alteren datos reales hasta validar primero las lecturas.
-
-## Limitación importante
-Este paquete corrige la integración WSGI y el paso de bindings, pero no puede demostrar por sí solo que todas las rutas funcionan en la red de Cloudflare. El plan gratuito de Workers tiene un límite de CPU de 10 ms por solicitud; si el Worker vuelve a superar ese límite, se necesitará perfilar/optimizar el código o usar un plan con más CPU. El ZIP no afirma que el despliegue ya esté validado.
+Este ZIP contiene los dos archivos de configuración/código que se deben aplicar; no contiene una copia de la imagen original. Cloudflare publicará la imagen existente desde `src/static` al desplegar el repositorio.
