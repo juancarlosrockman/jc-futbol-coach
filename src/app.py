@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from secrets import token_hex
 from werkzeug.security import generate_password_hash, check_password_hash
-import requests
 import base64
 
 app = Flask(__name__)
@@ -2340,6 +2339,7 @@ def google_calendar_connect():
 @app.route("/oauth/google/callback")
 @coach_required
 def google_calendar_callback():
+    import requests
     if request.args.get("error"):
         flash("No se autorizó Google Calendar.")
         return redirect(url_for("google_calendar_settings"))
@@ -2395,6 +2395,7 @@ def google_calendar_callback():
 @app.route("/entrenador/google-calendar/desconectar",methods=["POST"])
 @coach_required
 def google_calendar_disconnect():
+    import requests
     c=db()
     setting=_google_setting(c,session["user_id"])
     if setting:
