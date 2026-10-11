@@ -6,12 +6,17 @@ Cambios de esta versión:
 1. `requests` ya no se importa al cargar `src/app.py`; se importa dentro de las funciones de Google Calendar que lo necesitan.
 2. `src/worker.py` ya no ejecuta `init_db()` al abrir la página pública `/`.
 3. La inicialización/migración de la base de datos se difiere hasta la primera ruta dinámica distinta de `/`, y como máximo una vez por instancia del Worker.
-4. Las peticiones a `/static/*` y `/manifest.webmanifest` siguen sirviéndose directamente desde Assets.
+4. Las peticiones a `/static/*`, `/manifest.webmanifest` y `/sw.js` se sirven desde el binding de Assets declarado en `wrangler.jsonc`.
+5. Se declara explícitamente el directorio de Assets (`src/static`) y se corrige la adaptación de Hyperdrive a las propiedades que expone Python Workers.
+6. Se serializa la inicialización de base de datos en solicitudes en frío para evitar que varias solicitudes ejecuten migraciones a la vez.
+7. Se corrige el adaptador PostgreSQL para admitir `executemany`, usado al actualizar tarifas.
+8. El recordatorio de clase aparece el día de la clase al abrir la app, siempre que la clase aún no haya empezado.
+9. Las rutas de suscripción push se mantienen por compatibilidad, pero rechazan nuevas suscripciones: las notificaciones push están deshabilitadas.
 
 Importante:
 - Esto reduce trabajo innecesario al abrir la página principal, pero no permite garantizar que cada flujo esté por debajo del límite de CPU sin probar cada flujo en el runtime real de Cloudflare.
 - `init_db()` todavía contiene migraciones y reparaciones de datos. Si las primeras rutas que usan la base de datos vuelven a superar el límite, el siguiente cambio será separar esas migraciones de las solicitudes normales y ejecutarlas como tarea de mantenimiento controlada.
-- No se han cambiado datos, credenciales ni la configuración de Hyperdrive.
-- No se ha desplegado este ZIP ni se ha probado contra la base de datos real.
+- No se han cambiado datos reales, credenciales ni el identificador de Hyperdrive.
+- No se ha desplegado este ZIP ni se ha probado contra la base de datos real. La validación completa del empaquetado sigue pendiente porque el entorno de trabajo no pudo descargar dependencias de PyPI.
 
 Carga el ZIP completo por el mismo procedimiento que has usado antes. Después de desplegarlo, prueba primero la página principal y luego el inicio de sesión. Si la página principal carga pero el inicio de sesión falla, comparte el nuevo registro de Cloudflare; ese resultado permitirá aislar el coste de inicialización de base de datos.

@@ -649,8 +649,8 @@ def refresh_period_pricing(c, student_id, month):
         amounts=[unit if i<8 else break_tariff for i in range(len(rows))]
     else:
         amounts=[break_tariff]*len(rows)
-    with c.connection.cursor() as cur:
-        cur.executemany("UPDATE classes SET amount=%s WHERE id=%s",[(amounts[i],rows[i]["id"]) for i in range(len(rows))])
+    c.executemany("UPDATE classes SET amount=%s WHERE id=%s",
+                  [(amounts[i], rows[i]["id"]) for i in range(len(rows))])
 
 def refresh_all_active_period_pricing(c, student_id=None):
     students=c.execute("SELECT id FROM students WHERE status='active'"+(" AND id=%s" if student_id else ""),((student_id,) if student_id else ())).fetchall()
@@ -2039,19 +2039,22 @@ def parent_home():
             "recovery_paid_scheduled":recovery_paid_scheduled, "recovery_paid":sum(1 for x in recovery_for_month if x["payment_status"]=='paid'),
             "recovery_for_month":recovery_for_month, "reprogrammable_id":reprogrammable_id,
         })
-    # In-app reminders: within 2 hours before the class, per child/class,
-    # and persistently dismissed per parent account across devices.
+    # In-app reminders: show whenever the parent opens the app on the class day,
+    # provided the class has not started yet. Dismissal persists per parent/class.
     now_local = datetime.now(PERU_TZ)
+    today_local = now_local.date().isoformat()
     reminders = []
     for item in child_data:
         student = item["student"]
         for cl in item["upcoming"]:
+            if cl.get("date") != today_local:
+                continue
             try:
                 start_local = datetime.strptime(f"{cl['date']} {cl['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=PERU_TZ)
             except (ValueError, TypeError):
                 continue
             delta = (start_local - now_local).total_seconds()
-            if 0 < delta <= 7200:
+            if delta > 0:
                 already_seen = c.execute("SELECT 1 FROM parent_class_reminders_seen WHERE user_id=%s AND class_id=%s", (user_id, cl["id"])).fetchone()
                 if not already_seen:
                     reminders.append({"class_id": cl["id"], "student_id": student["id"], "student_name": student["student_name"], "date": cl["date"], "time": cl["time"], "place": cl.get("place") or student.get("place") or student.get("zone") or "Por confirmar", "minutes": max(1, int(delta // 60))})
@@ -2076,20 +2079,15 @@ def parent_reminder_seen(class_id):
 @app.route("/alumno/push/clave-publica")
 def parent_push_public_key():
     if session.get("role") != "parent": return {"error":"unauthorized"},401
-    return {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", "")}
+    # Push notifications are intentionally disabled for this deployment.
+    return {"error":"push_notifications_disabled"},410
 
 @app.route("/alumno/push/suscribir", methods=["POST"])
 def parent_push_subscribe():
     if session.get("role") != "parent": return {"error":"unauthorized"},401
-    payload = request.get_json(silent=True) or {}
-    endpoint = payload.get("endpoint")
-    if not endpoint or not isinstance(payload.get("keys"), dict): return {"error":"invalid subscription"},400
-    import json
-    c=db()
-    c.execute("""INSERT INTO push_subscriptions(user_id,endpoint,subscription_json) VALUES(%s,%s,%s)
-        ON CONFLICT(endpoint) DO UPDATE SET user_id=EXCLUDED.user_id,subscription_json=EXCLUDED.subscription_json""",(session["user_id"],endpoint,json.dumps(payload)))
-    c.commit(); c.close()
-    return {"ok":True}
+    # Keep the legacy route so old clients fail clearly rather than creating
+    # new subscriptions. In-app reminders remain available on the class day.
+    return {"error":"push_notifications_disabled"},410
 
 @app.route("/alumno/push/desuscribir", methods=["POST"])
 def parent_push_unsubscribe():

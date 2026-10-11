@@ -2,6 +2,10 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "jc-futbol-coach",
   "main": "src/worker.py",
+  "assets": {
+    "directory": "./src/static",
+    "binding": "ASSETS"
+  },
   "compatibility_date": "2026-10-09",
   "compatibility_flags": [
     "python_workers"

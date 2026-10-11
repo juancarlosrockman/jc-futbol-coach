@@ -36,6 +36,12 @@ class Connection:
         cursor.execute(sql, params or ())
         return DictCursor(cursor)
 
+    def executemany(self, sql, seq_of_params):
+        """Run a parameterized statement for multiple rows using pg8000."""
+        cursor = self._conn.cursor()
+        cursor.executemany(sql, seq_of_params)
+        return DictCursor(cursor)
+
     def commit(self):
         return self._conn.commit()
 
