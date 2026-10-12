@@ -1,4 +1,4 @@
-# JC Fútbol Coach v12.15.6
+# JC Fútbol Coach v12.18.9
 
 Base: v12.15.1.
 
@@ -44,3 +44,32 @@ Después del deploy, revisar la ficha de Marianito. No registrar un pago adicion
 - No aumenta `sessions_total` ni crea pagos nuevos para una recuperación.
 - No crea una segunda clase: repara la fila de destino existente.
 - La reparación automática sigue limitada al período inmediatamente anterior para respetar la regla mensual.
+
+
+## v12.18.9 — Correcciones de pagos, clases compartidas y alumnos nuevos
+
+- Se añadió la pantalla **Editar pago** para modificar monto, tarifa aplicada, cantidad de clases, fecha de pago y período.
+- La edición del pago se realiza en una transacción y recalcula la cobertura de clases sin cambiar la tarifa habitual del alumno.
+- La recalculación prioriza clases ya realizadas y conserva el vínculo de las recuperaciones con su período original.
+- La sincronización de Google Calendar ahora consolida los miembros de una `session_group_id` en un solo evento, reutiliza el evento existente y elimina eventos duplicados detectados en los miembros del grupo.
+- Al cancelar un miembro de una clase compartida, el evento se mantiene actualizado para los otros alumnos; se elimina únicamente cuando ya no quedan miembros activos.
+- Se añadió la marca **Alumno fijo** en Editar alumno. Los registros existentes se migran como fijos para no cambiar su comportamiento; los alumnos creados a partir de esta versión empiezan como nuevos.
+- Un alumno nuevo no puede marcar su primera clase como realizada si la clase no está cubierta por un pago. El entrenador puede marcarlo como fijo desde su ficha cuando corresponda.
+- Al compartir una clase, si el alumno ya tiene una sola clase activa ese mismo día a otra hora, se reutiliza esa clase y se ajusta al horario compartido conservando su pago y recuperación. Si hay varias clases ese día, la aplicación no crea ni mueve ninguna y pide resolver la agenda primero.
+
+## Despliegue en Render
+
+1. Descomprime el ZIP y sube el contenido de `src/` al repositorio de la aplicación, conservando la estructura de carpetas.
+2. Conserva los comandos de instalación e inicio ya configurados en Render. Para esta estructura, el inicio habitual es `gunicorn -c gunicorn.conf.py app:app`.
+3. Conserva las variables de entorno actuales (`DATABASE_URL`, `SECRET_KEY` y las credenciales OAuth de Google si Calendar está habilitado). No sustituyas secretos por valores de ejemplo.
+4. La aplicación aplica sus migraciones de esquema al iniciar mediante `init_db()`.
+
+## Verificación local realizada para v12.18.9
+
+- Compilación de Python correcta.
+- Las 28 plantillas Jinja se cargan sin errores.
+- Prueba funcional simulada de reutilización de una clase existente en otro horario del mismo día: no inserta una segunda clase y conserva la relación de pago.
+- Prueba del payload de Google Calendar: el evento compartido incluye ambos alumnos y los IDs de ambas clases.
+- Revisión de la ruta de edición de pagos: bloqueo transaccional, recálculo de cobertura y ausencia de actualización de la tarifa habitual del alumno.
+
+La sincronización externa de Google Calendar depende de que las credenciales OAuth estén configuradas y autorizadas. Las pruebas locales no acceden a la base de datos ni a la cuenta de Google de producción.

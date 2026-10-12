@@ -136,24 +136,30 @@ def _ensure_google_calendar(c, setting):
     setting["calendar_id"] = calendar["id"]
     return calendar["id"]
 
-def _calendar_event_payload(row):
+def _calendar_event_payload(row, group_rows=None):
+    """Build one Calendar event for a class or all students in a shared session."""
+    group_rows = group_rows or [row]
     start_dt = parse_iso_datetime(row["date"], row["time"])
-    try:
-        age = int(row.get("student_age") or 6)
-    except (TypeError, ValueError):
-        age = 6
-    duration = 30 if age <= 3 else (45 if age <= 5 else 60)
-    end_dt = start_dt + timedelta(minutes=duration)
-    student = row.get("student_name") or "Alumno"
+    durations=[]
+    for member in group_rows:
+        try:
+            age = int(member.get("student_age") or 6)
+        except (TypeError, ValueError):
+            age = 6
+        durations.append(30 if age <= 3 else (45 if age <= 5 else 60))
+    end_dt = start_dt + timedelta(minutes=max(durations or [60]))
+    names = list(dict.fromkeys((member.get("student_name") or "Alumno") for member in group_rows))
+    students_text = ", ".join(names)
     place = row.get("place") or row.get("student_zone") or "Por confirmar"
     mode = row.get("mode") or "Entrenamiento"
+    ids = ", ".join(str(member["id"]) for member in group_rows)
     return {
-        "summary": f"JC Fútbol Coach – {student}",
-        "description": f"Entrenamiento personalizado\nAlumno: {student}\nModalidad: {mode}\nLugar: {place}\nID de clase JCFC: {row['id']}",
+        "summary": f"JC Fútbol Coach – {students_text}",
+        "description": f"Entrenamiento personalizado\nAlumnos: {students_text}\nModalidad: {mode}\nLugar: {place}\nIDs de clases JCFC: {ids}",
         "location": place,
         "start": {"dateTime": start_dt.isoformat(), "timeZone": "America/Lima"},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": "America/Lima"},
-        "extendedProperties": {"private": {"jcfc_class_id": str(row["id"])}}
+        "extendedProperties": {"private": {"jcfc_class_ids": ids, "jcfc_session_group_id": str(row.get("session_group_id") or "")}}
     }
 
 def _set_google_sync_state(class_id, status, error=None):
@@ -169,10 +175,7 @@ def _set_google_sync_state(class_id, status, error=None):
 
 
 def sync_class_to_google(class_id, delete=False):
-    """Synchronize one JCFC class after the database transaction has succeeded.
-    Google errors never roll back the JCFC class; they are recorded so the coach
-    can retry synchronization later.
-    """
+    """Sync one class, using a single Google event for an entire shared session."""
     c = db()
     try:
         coach = c.execute("SELECT id FROM users WHERE role='coach' ORDER BY id LIMIT 1").fetchone()
@@ -183,38 +186,64 @@ def sync_class_to_google(class_id, delete=False):
             c.execute("UPDATE classes SET google_sync_status='not_connected',google_sync_error=%s WHERE id=%s", ("Google Calendar no está conectado.", class_id))
             c.commit()
             return False, "Google Calendar no está conectado."
-        row = c.execute("""SELECT classes.*,students.student_name,students.age AS student_age,students.zone AS student_zone
-            FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s""", (class_id,)).fetchone()
-        if not row:
+        requested = c.execute("SELECT * FROM classes WHERE id=%s", (class_id,)).fetchone()
+        if not requested:
             return False, "Clase no encontrada."
-        event_id = row.get("google_event_id")
+        group_id = requested.get("session_group_id")
+        if group_id:
+            rows = c.execute("""SELECT classes.*,students.student_name,students.age AS student_age,students.zone AS student_zone
+                FROM classes LEFT JOIN students ON students.id=classes.student_id
+                WHERE classes.session_group_id=%s AND classes.status IN ('scheduled','rescheduled','postponed')
+                ORDER BY classes.id""", (group_id,)).fetchall()
+            all_group_rows = c.execute("SELECT id,google_event_id FROM classes WHERE session_group_id=%s ORDER BY id", (group_id,)).fetchall()
+        else:
+            rows = c.execute("""SELECT classes.*,students.student_name,students.age AS student_age,students.zone AS student_zone
+                FROM classes LEFT JOIN students ON students.id=classes.student_id WHERE classes.id=%s
+                AND classes.status IN ('scheduled','rescheduled','postponed')""", (class_id,)).fetchall()
+            all_group_rows = c.execute("SELECT id,google_event_id FROM classes WHERE id=%s", (class_id,)).fetchall()
         calendar_id = setting.get("calendar_id") or _ensure_google_calendar(c, setting)
-        if delete or row.get("status") == "cancelled":
-            if event_id:
-                try:
-                    _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}")
-                except RuntimeError as e:
-                    if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
-                        raise
-                c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
-            else:
-                c.execute("UPDATE classes SET google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
-        elif row.get("status") in ("scheduled","rescheduled","postponed"):
-            payload = _calendar_event_payload(row)
-            if event_id:
-                try:
-                    event = _google_api(c, setting, "PATCH", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}", json=payload)
-                except RuntimeError as e:
-                    # If the event was deleted directly in Google Calendar,
-                    # recreate it instead of leaving JCFC permanently unsynced.
-                    if "HTTP 404" in str(e) or "HTTP 410" in str(e):
-                        c.execute("UPDATE classes SET google_event_id=NULL WHERE id=%s", (class_id,))
-                        event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
-                    else:
-                        raise
-            else:
-                event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
-            c.execute("UPDATE classes SET google_event_id=%s,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (event["id"], class_id))
+        event_ids = list(dict.fromkeys(r.get("google_event_id") for r in all_group_rows if r.get("google_event_id")))
+        if not rows:
+            # A member was cancelled. Keep the shared event while other students
+            # still have this session; remove it only when no active members remain.
+            if event_ids:
+                for event_id in event_ids:
+                    try:
+                        _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}")
+                    except RuntimeError as e:
+                        if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
+                            raise
+            c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE session_group_id=%s", (group_id,)) if group_id else c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
+            c.commit()
+            return True, None
+        # Reuse an existing event id if possible. Duplicate events created by older
+        # versions are removed after the canonical event is updated.
+        canonical_id = event_ids[0] if event_ids else None
+        payload = _calendar_event_payload(rows[0], rows)
+        if canonical_id:
+            try:
+                event = _google_api(c, setting, "PATCH", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(canonical_id,safe='')}", json=payload)
+            except RuntimeError as e:
+                if "HTTP 404" in str(e) or "HTTP 410" in str(e):
+                    event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
+                else:
+                    raise
+        else:
+            event = _google_api(c, setting, "POST", f"/calendars/{quote(calendar_id,safe='')}/events", json=payload)
+        canonical_id = event["id"]
+        for duplicate_id in event_ids:
+            if duplicate_id == canonical_id:
+                continue
+            try:
+                _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(duplicate_id,safe='')}")
+            except RuntimeError as e:
+                if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
+                    raise
+        if group_id:
+            c.execute("UPDATE classes SET google_event_id=%s,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE session_group_id=%s AND status IN ('scheduled','rescheduled','postponed')", (canonical_id, group_id))
+            c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE session_group_id=%s AND status NOT IN ('scheduled','rescheduled','postponed')", (group_id,))
+        else:
+            c.execute("UPDATE classes SET google_event_id=%s,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (canonical_id, class_id))
         c.commit()
         return True, None
     except Exception as exc:
@@ -229,7 +258,6 @@ def sync_class_to_google(class_id, delete=False):
         return False, message
     finally:
         c.close()
-
 
 def password_is_hashed(value):
     return isinstance(value, str) and (value.startswith("scrypt:") or value.startswith("pbkdf2:"))
@@ -291,6 +319,9 @@ def init_db():
         turn TEXT NOT NULL, is_full BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP")
+    # Existing records are treated as established students; students created from now on default to new.
+    c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS is_regular BOOLEAN NOT NULL DEFAULT TRUE")
+    c.execute("ALTER TABLE students ALTER COLUMN is_regular SET DEFAULT FALSE")
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS break_tariff DOUBLE PRECISION")
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS package_price DOUBLE PRECISION")
     # Package metadata is separate from the student's habitual tariff.
@@ -1272,8 +1303,8 @@ def new_student():
                 password_notice = parent_password
             package_price = 440.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (600.0 if age >= 6 else None)
             break_tariff = 60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (80.0 if age >= 6 else tariff)
-            sid = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,package_price,photo_consent)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            sid = c.execute("""INSERT INTO students(user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,package_price,photo_consent,is_regular)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE) RETURNING id""",
                 (user_id,parent_name,parent_whatsapp,student_name,dni,age,zone,mode,place,tariff,break_tariff,package_price,photo_consent)).fetchone()["id"]
             created = save_class_groups(c, sid, tariff, request.form)
             payment_id = save_optional_payment(c, sid, request.form, created)
@@ -1454,8 +1485,8 @@ def edit_student(sid):
         if break_tariff <= 0:
             break_tariff=60.0 if age >= 6 and abs(tariff-55.0) < 0.01 else tariff
         package_price = 440.0 if age >= 6 and abs(tariff-55.0) < 0.01 else (600.0 if age >= 6 else None)
-        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,break_tariff=%s,package_price=%s,photo_consent=%s WHERE id=%s""",
-                  (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,break_tariff,package_price,request.form["photo_consent"],sid))
+        c.execute("""UPDATE students SET user_id=%s,parent_name=%s,parent_whatsapp=%s,student_name=%s,dni=%s,age=%s,zone=%s,mode=%s,place=%s,tariff=%s,break_tariff=%s,package_price=%s,photo_consent=%s,is_regular=%s WHERE id=%s""",
+                  (user_id,parent_name,parent_whatsapp,student_name,dni,age,request.form["zone"].strip(),request.form["mode"],request.form["place"].strip(),tariff,break_tariff,package_price,request.form["photo_consent"],request.form.get("is_regular")=="yes",sid))
         c.commit(); c.close(); flash("Alumno actualizado correctamente."); return redirect(url_for("student_detail",sid=sid))
     c.close(); return render_template("edit_student.html",s=s)
 
@@ -1537,31 +1568,42 @@ def add_student_to_shared_class(class_id):
         c.close(); flash("Alumno no encontrado."); return redirect(url_for("edit_class",class_id=class_id))
     if sid==current["student_id"]:
         c.close(); flash("Ese alumno ya pertenece a la clase."); return redirect(url_for("edit_class",class_id=class_id))
-    duplicate=c.execute("SELECT * FROM classes WHERE student_id=%s AND date=%s AND time=%s AND status<>'cancelled' ORDER BY id LIMIT 1",(sid,current["date"],current["time"])).fetchone()
+    # Resolve all active classes for this student on the target date first. This
+    # prevents a same-time match from hiding a second class later that day.
+    same_day=c.execute("SELECT * FROM classes WHERE student_id=%s AND date=%s AND status IN ('scheduled','rescheduled','postponed','attended') ORDER BY time,id",(sid,current["date"])).fetchall()
+    if len(same_day) > 1:
+        c.close(); flash("Este alumno ya tiene varias clases ese día. Revisa su agenda y resuelve cuál debe compartirse; no se creó ni modificó ninguna clase.")
+        return redirect(url_for("edit_class",class_id=class_id))
+    duplicate=same_day[0] if same_day else None
+    reused_different_time = bool(duplicate and duplicate["time"] != current["time"])
     if duplicate:
-        # IMPORTANT: the student is already scheduled at this exact time.
-        # Do not create a second class. Reuse the existing class and turn the
-        # two records into one Clase compartida. This is the real workflow for
-        # a student such as Marianito who was already added manually.
+        # Reuse the existing row, even if it was originally booked at another
+        # time. This preserves its payment/recovery links and prevents duplicate
+        # sessions for the same student on the same date.
         group=current.get("session_group_id") or duplicate.get("session_group_id") or str(uuid.uuid4())
         if current.get("session_group_id") and duplicate.get("session_group_id") and current.get("session_group_id") != duplicate.get("session_group_id"):
-            # Merge both existing groups into the current shared class.
             c.execute("UPDATE classes SET session_group_id=%s WHERE session_group_id=%s",(group,duplicate["session_group_id"]))
         else:
             c.execute("UPDATE classes SET session_group_id=%s WHERE id IN (%s,%s)" % ("%s", "%s", "%s"),(group,current["id"],duplicate["id"]))
-        # If the existing class is a recovery created manually, attach it to
-        # the original paid class instead of making it a new unpaid class.
+        # Both rows represent one real-world training: align the reused row's
+        # schedule/location with the target class while preserving its own
+        # payment, recovery and attendance history.
+        c.execute("UPDATE classes SET date=%s,time=%s,mode=%s,place=%s,session_group_id=%s WHERE id=%s",
+                  (current["date"],current["time"],current.get("mode"),current.get("place"),group,duplicate["id"]))
         attach_recovery_payment(c,duplicate["id"])
         repair_pending_recoveries(c,sid)
         sync_payment_status(c,sid)
         c.commit(); c.close(); sync_class_to_google(duplicate["id"])
-        flash(f"{student['student_name']} ya tenía una clase en ese horario y fue incorporado a la Clase compartida.")
+        if reused_different_time:
+            flash(f"Se reutilizó la clase existente de {student['student_name']} y se ajustó al horario compartido. Su pago e historial se conservaron.")
+        else:
+            flash(f"{student['student_name']} ya tenía una clase en ese horario y fue incorporado a la Clase compartida.")
         return redirect(url_for("edit_class",class_id=class_id))
     group=current.get("session_group_id") or str(uuid.uuid4())
     c.execute("UPDATE classes SET session_group_id=%s WHERE id=%s",(group,class_id))
     row=c.execute("""INSERT INTO classes(student_id,date,time,mode,place,amount,status,payment_status,original_date,original_time,notes,session_group_id)
         VALUES(%s,%s,%s,%s,%s,%s,'scheduled','pending',%s,%s,%s,%s) RETURNING id""",
-        (sid,current["date"],current["time"],student["mode"],student["place"],student["tariff"],current["date"],current["time"],"Clase compartida",group)).fetchone()
+        (sid,current["date"],current["time"],current.get("mode"),current.get("place"),student["tariff"],current["date"],current["time"],"Clase compartida",group)).fetchone()
     attach_recovery_payment(c,row["id"])
     repair_pending_recoveries(c,sid)
     sync_payment_status(c,sid)
@@ -1622,6 +1664,14 @@ def update_class_status(class_id):
     if status not in allowed: flash("Estado no válido."); return redirect(request.referrer or url_for("dashboard"))
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    if status == "attended":
+        sync_payment_status(c, row["student_id"])
+        c.commit()
+        row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
+    if status == "attended" and row.get("payment_status") != "paid":
+        student=c.execute("SELECT is_regular FROM students WHERE id=%s", (row["student_id"],)).fetchone()
+        if student and not student.get("is_regular"):
+            c.close(); flash("Este alumno es nuevo: debe tener la clase cubierta por un pago antes de registrar su asistencia. Marca al alumno como fijo desde Editar alumno cuando corresponda."); return redirect(request.referrer or url_for("dashboard"))
     if status=="cancelled":
         # Keep the payment relationship available for a later recovery. A
         # cancelled class does not count as consumed by sync_payment_status.
@@ -1854,6 +1904,73 @@ def payments():
         current_month=current_month,selected_month=selected_month,month_rows=month_rows,month_total=month_total,
         monthly_totals=by_month,months=months,month_labels=month_labels,pending_total=pending_total,pending_by_student=pending_by_student,
         pending_tariff_by_student=pending_tariff_by_student,pending_count_by_student=pending_count_by_student)
+
+
+@app.route("/entrenador/pago/<int:payment_id>/editar", methods=["GET", "POST"])
+@coach_required
+def edit_payment(payment_id):
+    c = db()
+    payment = c.execute("SELECT payments.*,students.student_name,students.tariff AS habitual_tariff FROM payments JOIN students ON students.id=payments.student_id WHERE payments.id=%s", (payment_id,)).fetchone()
+    if not payment:
+        c.close(); flash("No se encontró el pago."); return redirect(url_for("payments"))
+    if request.method == "POST":
+        try:
+            amount = float(request.form.get("amount", ""))
+            applied_tariff = float(request.form.get("applied_tariff", ""))
+            sessions_total = int(request.form.get("sessions_total", ""))
+            month = request.form.get("month", "").strip()
+            paid_date = date.fromisoformat(request.form.get("paid_date", ""))
+            datetime.strptime(month, "%Y-%m")
+            if amount <= 0 or applied_tariff <= 0 or sessions_total < 1 or sessions_total > 200:
+                raise ValueError
+        except (TypeError, ValueError):
+            c.close(); flash("Revisa el monto, tarifa, cantidad de clases, fecha y período."); return redirect(url_for("edit_payment", payment_id=payment_id))
+        try:
+            # Lock the payment and perform the whole correction in one transaction.
+            locked = c.execute("SELECT * FROM payments WHERE id=%s FOR UPDATE", (payment_id,)).fetchone()
+            if not locked:
+                c.rollback(); c.close(); flash("El pago ya no existe."); return redirect(url_for("payments"))
+            paid_at = datetime.combine(paid_date, datetime.min.time()).replace(hour=12)
+            c.execute("""UPDATE payments SET amount=%s,applied_tariff=%s,sessions_total=%s,month=%s,paid_at=%s
+                WHERE id=%s""", (amount, applied_tariff, sessions_total, month, paid_at, payment_id))
+            # Release active classes previously linked to this payment so the new
+            # period/capacity can be recalculated. Cancelled source classes keep
+            # their recovery references and do not consume package capacity.
+            c.execute("""UPDATE classes SET payment_id=NULL,payment_status='pending'
+                WHERE payment_id=%s AND status<>'cancelled'""", (payment_id,))
+            sid = locked["student_id"]
+            if locked["payment_type"] == "package_8":
+                eligible = c.execute("""SELECT id FROM classes
+                    WHERE student_id=%s AND payment_id IS NULL AND is_recovery=FALSE
+                      AND status IN ('attended','scheduled','rescheduled','postponed')
+                    ORDER BY CASE WHEN status='attended' THEN 0 ELSE 1 END,date,time,id""", (sid,)).fetchall()
+            else:
+                eligible = c.execute("""SELECT id FROM classes
+                    WHERE student_id=%s AND payment_id IS NULL
+                      AND status IN ('attended','scheduled','rescheduled','postponed')
+                      AND (CASE WHEN is_recovery THEN LEFT(COALESCE(recovery_month,original_date,date),7) ELSE LEFT(date,7) END)=%s
+                    ORDER BY CASE WHEN status='attended' THEN 0 ELSE 1 END,date,time,id""", (sid, month)).fetchall()
+            selected_ids = [r["id"] for r in eligible[:sessions_total]]
+            if selected_ids:
+                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=ANY(%s)", (payment_id, selected_ids))
+            sync_payment_status(c, sid)
+            # The applied tariff belongs to this payment, not the student's
+            # habitual tariff. Update only non-recovery classes actually covered.
+            c.execute("UPDATE classes SET amount=%s WHERE payment_id=%s AND is_recovery=FALSE AND status<>'cancelled'", (applied_tariff, payment_id))
+            c.commit()
+        except Exception:
+            c.rollback(); c.close(); app.logger.exception("Payment edit failed for payment %s", payment_id)
+            flash("No se pudo guardar el pago. No se aplicaron cambios; vuelve a intentarlo.")
+            return redirect(url_for("edit_payment", payment_id=payment_id))
+        c.close(); flash("Pago actualizado y clases cubiertas recalculadas. La tarifa habitual del alumno no se modificó.")
+        return redirect(url_for("payments", month=month))
+    paid_date = payment.get("paid_at")
+    if paid_date:
+        paid_date = paid_date.date().isoformat() if isinstance(paid_date, datetime) else str(paid_date)[:10]
+    else:
+        paid_date = datetime.now(PERU_TZ).date().isoformat()
+    c.close()
+    return render_template("edit_payment.html", payment=payment, paid_date=paid_date)
 
 
 @app.route("/entrenador/disponibilidad", methods=["GET","POST"])
