@@ -203,6 +203,22 @@ def sync_class_to_google(class_id, delete=False):
             all_group_rows = c.execute("SELECT id,google_event_id FROM classes WHERE id=%s", (class_id,)).fetchall()
         calendar_id = setting.get("calendar_id") or _ensure_google_calendar(c, setting)
         event_ids = list(dict.fromkeys(r.get("google_event_id") for r in all_group_rows if r.get("google_event_id")))
+        if delete:
+            # The caller deletes the database row only after this function returns.
+            # Delete the remote event explicitly; otherwise the ordinary sync path
+            # would PATCH the event and leave an orphan in Google Calendar.
+            for event_id in event_ids:
+                try:
+                    _google_api(c, setting, "DELETE", f"/calendars/{quote(calendar_id,safe='')}/events/{quote(event_id,safe='')}")
+                except RuntimeError as e:
+                    if "HTTP 404" not in str(e) and "HTTP 410" not in str(e):
+                        raise
+            if group_id:
+                c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE session_group_id=%s", (group_id,))
+            else:
+                c.execute("UPDATE classes SET google_event_id=NULL,google_sync_status='synced',google_sync_error=NULL,google_synced_at=CURRENT_TIMESTAMP WHERE id=%s", (class_id,))
+            c.commit()
+            return True, None
         if not rows:
             # A member was cancelled. Keep the shared event while other students
             # still have this session; remove it only when no active members remain.
@@ -1763,10 +1779,25 @@ def manual_recovery(class_id):
 def delete_class(class_id):
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
+    group_id=row.get("session_group_id"); sid=row["student_id"]
+    if group_id:
+        # A shared calendar event belongs to the session, not to one student.
+        # Remove only this student's row, then update the single surviving event.
+        other=c.execute("SELECT id FROM classes WHERE session_group_id=%s AND id<>%s AND status IN ('scheduled','rescheduled','postponed') ORDER BY id LIMIT 1",(group_id,class_id)).fetchone()
+        if other:
+            c.execute("DELETE FROM classes WHERE id=%s",(class_id,))
+            sync_payment_status(c,sid)
+            c.commit(); c.close()
+            sync_class_to_google(other["id"])
+            flash("Se eliminó esta clase del alumno. La sesión compartida del otro alumno se conservó.")
+            return redirect(request.referrer or url_for("dashboard"))
     c.close()
+    # For a solo session (or the final active member), remove the calendar event
+    # before deleting the row, because its event id is stored on that row.
     sync_class_to_google(class_id, delete=True)
-    c=db()
-    c.execute("DELETE FROM classes WHERE id=%s",(class_id,)); c.commit(); c.close(); flash("Clase eliminada."); return redirect(request.referrer or url_for("dashboard"))
+    c=db(); c.execute("DELETE FROM classes WHERE id=%s",(class_id,)); sync_payment_status(c,sid); c.commit(); c.close()
+    flash("Clase eliminada. Los registros de pago del alumno se conservaron.")
+    return redirect(request.referrer or url_for("dashboard"))
 
 
 @app.route("/entrenador/clases/nueva", methods=["GET","POST"])
@@ -1906,6 +1937,36 @@ def payments():
         pending_tariff_by_student=pending_tariff_by_student,pending_count_by_student=pending_count_by_student)
 
 
+@app.route("/entrenador/pago/<int:payment_id>/eliminar", methods=["POST"])
+@coach_required
+def delete_payment(payment_id):
+    c=db()
+    payment=c.execute("SELECT * FROM payments WHERE id=%s FOR UPDATE",(payment_id,)).fetchone()
+    if not payment:
+        c.close(); flash("No se encontró el pago."); return redirect(url_for("payments"))
+    sid=payment["student_id"]
+    # A payment referenced by a cancelled source class may be the only proof of
+    # entitlement to a recovery. Refuse deletion rather than break that history.
+    recovery_ref=c.execute("SELECT id FROM classes WHERE recovery_payment_id=%s LIMIT 1",(payment_id,)).fetchone()
+    attended_ref=c.execute("SELECT id FROM classes WHERE payment_id=%s AND status='attended' LIMIT 1",(payment_id,)).fetchone()
+    if recovery_ref or attended_ref:
+        reason = "una recuperación" if recovery_ref else "una clase ya asistida"
+        c.close(); flash(f"No se puede eliminar este pago porque está vinculado a {reason}. Edita el pago para corregirlo y conservar el historial.")
+        return redirect(url_for("payments",month=payment["month"]))
+    try:
+        c.execute("UPDATE classes SET payment_id=NULL,payment_status='pending' WHERE payment_id=%s",(payment_id,))
+        c.execute("DELETE FROM payments WHERE id=%s",(payment_id,))
+        sync_payment_status(c,sid)
+        c.commit()
+    except Exception:
+        c.rollback(); app.logger.exception("Payment deletion failed for payment %s",payment_id)
+        c.close(); flash("No se pudo eliminar el pago; no se aplicaron cambios.")
+        return redirect(url_for("payments",month=payment["month"]))
+    c.close()
+    flash("Pago eliminado y cobertura de clases recalculada. Revisa el saldo del alumno antes de continuar.")
+    return redirect(url_for("payments",month=payment["month"]))
+
+
 @app.route("/entrenador/pago/<int:payment_id>/editar", methods=["GET", "POST"])
 @coach_required
 def edit_payment(payment_id):
@@ -2011,8 +2072,8 @@ def availability():
         if duplicate:
             c.close(); return redirect(url_for("availability"))
         c.execute("INSERT INTO availability(zone,day,time,turn,active) VALUES(%s,%s,%s,%s,TRUE)",(zone,day,time,turn))
-        # A newly published recurring slot means this turn is no longer fully closed.
-        c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(current_month,turn))
+        # Do not clear the manually selected "agenda llena" state when a fixed
+        # slot is added. Only the explicit "Abrir agenda" action reopens it.
         c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
@@ -2409,18 +2470,37 @@ def coach_reschedule(class_id):
 @app.route("/entrenador/google-calendar/sincronizar", methods=["POST"])
 @coach_required
 def google_calendar_sync_all():
-    c=db()
-    ids=c.execute("SELECT id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
-    c.close()
-    ok=0; failed=0
+    # Keep a database/initial-query failure from surfacing as an unhandled HTTP 500.
+    # Each class sync already records its own detailed error state.
+    try:
+        c=db()
+        try:
+            ids=c.execute("SELECT id,session_group_id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
+        finally:
+            c.close()
+    except Exception:
+        app.logger.exception("Could not load classes for Google Calendar bulk sync")
+        flash("No se pudo iniciar la sincronización. La aplicación no modificó las clases; revisa los registros de Render.")
+        return redirect(url_for("google_calendar_settings"))
+    # Sync one representative per shared session, not every student row. This
+    # reduces redundant API calls and prevents repeated updates to the same event.
+    seen_groups=set(); targets=[]
     for item in ids:
-        success, _ = sync_class_to_google(item["id"])
+        group_id=item.get("session_group_id")
+        if group_id:
+            if group_id in seen_groups:
+                continue
+            seen_groups.add(group_id)
+        targets.append(item["id"])
+    ok=0; failed=0
+    for class_id in targets:
+        success, _ = sync_class_to_google(class_id)
         if success: ok += 1
         else: failed += 1
     if failed:
-        flash(f"Sincronización terminada: {ok} clase(s) sincronizada(s) y {failed} con error. Revisa la conexión de Google Calendar.")
+        flash(f"Sincronización terminada: {ok} sesión(es) sincronizada(s) y {failed} con error. Revisa la conexión de Google Calendar.")
     else:
-        flash(f"Sincronización terminada: {ok} clase(s) sincronizada(s) con Google Calendar.")
+        flash(f"Sincronización terminada: {ok} sesión(es) sincronizada(s) con Google Calendar.")
     return redirect(url_for("google_calendar_settings"))
 
 @app.route("/entrenador/google-calendar")
@@ -2486,7 +2566,7 @@ def google_calendar_callback():
         c.commit(); c.close()
         # Backfill all active/future classes. This also initializes events for existing schedule.
         c=db()
-        ids=c.execute("SELECT id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
+        ids=c.execute("SELECT id,session_group_id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
         c.close()
         ok=0; failed=0
         for item in ids:

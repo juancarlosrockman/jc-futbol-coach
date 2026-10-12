@@ -1,0 +1,18 @@
+JC FUTBOL COACH — VERSION 12.18.11
+
+Cambios de esta versión basados en el código 12.18.10:
+- En el panel de la semana, la clase agendada ahora ofrece "Editar / compartir" y "Eliminar clase" con confirmación. Al borrar una fila de una sesión compartida, la lógica elimina solo la participación de ese alumno y conserva la sesión del otro.
+- La sincronización masiva con Google Calendar ahora procesa una sola fila por sesión compartida, reduciendo llamadas repetidas para el mismo evento.
+- Si falla la consulta inicial de clases para la sincronización masiva, se registra la excepción en los logs y se muestra un mensaje controlado en lugar de dejar que el error se convierta en una respuesta 500 sin manejar.
+- Se conserva la opción para agregar un alumno existente a una sesión desde la pantalla "Editar clase".
+- Se conserva la eliminación de pagos con confirmación y la persistencia de "Agenda llena" incluida en 12.18.10.
+
+Pruebas realizadas en este entorno:
+- Compilación sintáctica de app.py y gunicorn.conf.py.
+- Parseo de plantillas Jinja.
+- Inspección de integridad del ZIP y comprobación de rutas de las funciones modificadas.
+
+Limitaciones:
+- No hay conexión a la base PostgreSQL ni credenciales de Google Calendar en este entorno; no se pudieron ejecutar pruebas de integración contra datos reales.
+- Esta versión no modifica datos ni despliega automáticamente en Render.
+- Los saldos históricos específicos de Diego/Rodrigo/Marianito deben comprobarse con sus datos reales en una prueba controlada; no se han editado datos de producción.

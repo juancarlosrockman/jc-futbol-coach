@@ -1,0 +1,14 @@
+JC FUTBOL COACH — VERSION 12.18.10
+
+Cambios incluidos en esta entrega:
+- Al eliminar un alumno de una sesión compartida, se elimina únicamente su fila de clase y se actualiza el evento compartido para conservar a los demás alumnos.
+- La opción "Agenda llena" ya no se desactiva automáticamente al agregar un horario fijo. Solo se abre mediante la acción explícita de abrir agenda.
+- Se añade eliminación de pagos con confirmación en la pantalla Pagos. Antes de borrar, la aplicación bloquea pagos ligados a clases asistidas o a referencias de recuperación para proteger el historial. Los pagos elegibles se eliminan en una transacción y se recalcula la cobertura de clases.
+- Se conserva la función existente para agregar un alumno a una clase compartida desde Editar clase.
+
+Validación realizada en el entorno de preparación:
+- Compilación sintáctica de app.py y gunicorn.conf.py: correcta.
+- Comprobaciones estáticas de las rutas/cambios descritos: correctas.
+- No se pudo realizar una prueba de integración con Flask/PostgreSQL ni Google Calendar porque las dependencias y credenciales de producción no están disponibles en este entorno. Por tanto, esta entrega no afirma que se haya probado contra datos reales.
+
+Antes de desplegar: conserva una copia del ZIP actual y verifica el resultado en Render después del despliegue. No se han modificado datos de producción.

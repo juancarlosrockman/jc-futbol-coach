@@ -1,0 +1,21 @@
+JC FUTBOL COACH — VERSION 12.18.12
+
+Paquete consolidado basado en la versión 12.18.11.
+
+Cambios incluidos:
+- Agregar un alumno a una sesión existente desde Editar clase, reutilizando su clase del mismo día cuando existe y preservando sus referencias de pago/recuperación.
+- Clases compartidas: eliminar solo la participación del alumno elegido cuando otro alumno sigue en la sesión.
+- Corrección adicional de Google Calendar: la eliminación de una clase individual elimina explícitamente el evento remoto (si Google Calendar está conectado), en lugar de pasar por el flujo normal de actualización y dejar el evento huérfano.
+- Sincronización masiva evita procesar varias veces el mismo grupo compartido y presenta un mensaje controlado si falla la consulta inicial.
+- Eliminar pagos con confirmación y protecciones cuando el pago está asociado a una recuperación o a una clase asistida.
+- Mantener el estado manual de “Agenda llena” al añadir horarios fijos.
+
+Validaciones ejecutadas en el entorno de construcción:
+- Compilación de app.py y gunicorn.conf.py.
+- Parseo de todas las plantillas Jinja.
+- Integridad del ZIP y comprobación de archivos requeridos.
+- Pruebas automatizadas de regresión incluidas en tests/test_regressions.py.
+
+Limitaciones de validación:
+- No se dispone de conexión de prueba a PostgreSQL ni credenciales de Google Calendar en este entorno; por tanto, no se puede afirmar que se hayan ejecutado pruebas integrales contra servicios reales.
+- No se modificaron datos ni se desplegó nada en producción.
