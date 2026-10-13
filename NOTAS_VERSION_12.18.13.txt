@@ -1,0 +1,17 @@
+JC FUTBOL COACH — VERSION 12.18.13
+
+Cambios de esta actualización incremental basada en 12.18.12:
+- En la primera reprogramación solicitada por el padre, la aplicación limita la pantalla y la validación del servidor a una sola opción: la primera clase disponible del horario objetivo del mes siguiente.
+- En Editar clase se incorpora un botón de borrar la programación futura del alumno, con confirmación. Usa la ruta existente que elimina solo la participación de ese alumno cuando la sesión es compartida.
+- Se conservan las funciones que ya existían en 12.18.12 para compartir una clase desde Editar clase, borrar pagos con protecciones y conservar el estado manual de Agenda llena.
+
+Validación local:
+- Se ejecutan pruebas de sintaxis Python.
+- Se valida el parseo de las plantillas Jinja.
+- Se ejecutan las pruebas automatizadas de regresión incluidas.
+- Se verifica integridad y contenido del ZIP.
+
+Limitaciones conocidas:
+- No hay conexión de prueba a PostgreSQL ni credenciales reales de Google Calendar en este entorno; no se afirma que se hayan probado los flujos integrales de producción.
+- Esta versión no completa todavía todas las actualizaciones acordadas. En particular, no se ha terminado la detección automática del horario coincidente al agendar una clase nueva, ni la herramienta guiada para unir clases antiguas, ni el diagnóstico de los saldos históricos de Diego/Álvaro, ni las pruebas de rendimiento antes/después.
+- No se modificaron datos ni se desplegó nada en producción.

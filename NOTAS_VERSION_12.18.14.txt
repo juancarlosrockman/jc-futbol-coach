@@ -1,0 +1,44 @@
+JC FUTBOL COACH — VERSION 12.18.14
+Base: paquete Render 12.18.13. Esta versión conserva los cambios previos y añade las correcciones enumeradas aquí.
+
+CAMBIOS INCLUIDOS
+1. Agenda nueva y clases compartidas
+- Antes de guardar una programación, la interfaz consulta si ya existe otro alumno en la misma fecha, hora, modalidad y lugar.
+- Si existe coincidencia, pregunta expresamente si se quiere compartir. Aceptar consolida en una sesión compartida; cancelar registra la programación por separado.
+- La opción por defecto es NO compartir si no se confirma, incluso si la consulta de coincidencias falla.
+- La asistencia, el pago y la cobertura siguen vinculados a la fila individual de cada alumno.
+
+2. Unir clases históricas que realmente eran la misma sesión
+- En Editar clase aparece una herramienta para unir reservas existentes de fecha y hora exactas.
+- Exige confirmación y comprueba que no se duplique un alumno dentro del grupo.
+- Conserva filas individuales, pagos, asistencia e historial; no elimina registros.
+- Actualiza la sesión de Google Calendar para dejar un solo evento compartido. Si Calendar falla, informa el fallo sin revertir silenciosamente la agrupación local.
+
+3. Agenda llena persistente
+- El estado de agenda llena deja de depender del mes calendario y se conserva hasta pulsar manualmente “Abrir agenda”.
+- En el primer arranque tras actualizar, se inicializa el estado global usando el último estado mensual disponible, solo si todavía no existe uno global.
+
+4. Validación de pagos
+- Al editar un pago mensual, si el monto es exactamente divisible por la tarifa aplicada, la cantidad de clases debe coincidir con el resultado. Por ejemplo, S/440 a S/55 debe cubrir 8 clases, no 7.
+- La validación no cambia registros de producción por sí misma; actúa cuando se edita y guarda un pago.
+
+5. Diagnóstico de rendimiento y errores
+- Se añade el encabezado Server-Timing en las respuestas HTTP.
+- Las peticiones que tardan 750 ms o más dejan un aviso de diagnóstico en los logs de Render con endpoint, método, estado y duración, sin registrar el cuerpo de la petición ni secretos.
+
+VALIDACIÓN LOCAL EJECUTADA
+- `python -m py_compile app.py gunicorn.conf.py`: correcto.
+- Pruebas automatizadas incluidas: 10 pasaron.
+- Plantillas Jinja: se cargan en las pruebas automatizadas.
+- Integridad ZIP: verificada después de empaquetar.
+
+LÍMITES DE ESTA VALIDACIÓN
+- No se conectó a PostgreSQL de producción ni se alteraron registros de alumnos, pagos o clases.
+- No se pudieron ejecutar pruebas de extremo a extremo con las credenciales reales de Google Calendar; el éxito OAuth y las respuestas reales de Calendar deben verificarse tras el despliegue.
+- La medición de rendimiento ahora queda registrada en Render; no se inventan resultados de carga ni se afirma que se midió producción desde este entorno.
+
+DESPLIEGUE
+- Subir el contenido de `src/` al repositorio de Render conservando carpetas y archivos.
+- Mantener los comandos y variables de entorno actuales. No reemplazar `DATABASE_URL`, `SECRET_KEY` ni las variables OAuth de Google.
+- La aplicación aplica las migraciones de esquema al iniciar mediante `init_db()`.
+- No se ha desplegado automáticamente ni se han modificado datos de producción.

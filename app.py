@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, Response, abort
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, Response, abort, g
 import os
+import time
 import hashlib
 import uuid
 import re
@@ -367,6 +368,13 @@ def init_db():
     WHERE age >= 6 AND ABS(COALESCE(break_tariff,0) - 80) < 0.01
       AND ABS(tariff - 80) >= 0.01""")
     c.execute("ALTER TABLE availability_status ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE")
+    c.execute("""INSERT INTO availability_status(month,turn,is_full)
+        SELECT 'global', src.turn, src.is_full FROM (
+            SELECT DISTINCT ON (turn) turn,is_full FROM availability_status
+            WHERE month <> 'global' ORDER BY turn,month DESC,id DESC
+        ) src
+        WHERE NOT EXISTS (SELECT 1 FROM availability_status WHERE month='global')
+        ON CONFLICT(month,turn) DO NOTHING""")
     c.execute("""CREATE TABLE IF NOT EXISTS login_attempts(
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         ip TEXT NOT NULL,
@@ -517,6 +525,11 @@ def inject_security_helpers():
 
 
 @app.before_request
+def start_request_timer():
+    g.request_started_at = time.perf_counter()
+
+
+@app.before_request
 def track_authenticated_parent_presence():
     # A recent request means the parent is using the app. Five minutes is the
     # online window; the timestamp itself is retained as the last connection.
@@ -545,6 +558,14 @@ def secrets_compare(a, b):
 
 @app.after_request
 def add_security_headers(response):
+    started = getattr(g, "request_started_at", None)
+    if started is not None:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        # Log slow endpoints for diagnosis without exposing request bodies or secrets.
+        if elapsed_ms >= 750:
+            app.logger.warning("Slow request endpoint=%s method=%s status=%s elapsed_ms=%.1f",
+                               request.endpoint or "unknown", request.method, response.status_code, elapsed_ms)
+        response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -1082,7 +1103,7 @@ def nuevo():
         if turn not in TURN_ORDER:
             c.close(); flash("Completa los datos obligatorios."); return redirect(url_for("nuevo"))
         current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
-        closed=c.execute("SELECT is_full FROM availability_status WHERE month=%s AND turn=%s",(current_month,turn)).fetchone()
+        closed=c.execute("SELECT is_full FROM availability_status WHERE month='global' AND turn=%s",(turn,)).fetchone()
         if closed and closed["is_full"]:
             c.close(); flash("La agenda de ese turno está llena. Puedes unirte a la lista de espera."); return redirect(url_for("nuevo"))
         schedule_day, schedule_time = "", ""
@@ -1125,7 +1146,7 @@ def nuevo():
             zones.append(a["zone"]); seen.add(a["zone"])
         public_availability.append({"zone": a["zone"], "day": a["day"], "time": display_time(a["time"]), "raw_time": a["time"], "turn": a.get("turn") or turn_for_time(a["time"])})
     current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
-    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month='global'").fetchall()
     agenda_status={r["turn"]:bool(r["is_full"]) for r in status_rows}
     c.close()
     return render_template("new.html", availability=public_availability, zones=zones, turns=TURN_ORDER, agenda_status=agenda_status)
@@ -1385,7 +1406,10 @@ def save_class_groups(c, sid, tariff, form):
         # (siblings, cousins, or another small group). Each student keeps their
         # own classes and payments. Classes sharing date/time/mode/place are
         # linked to the same session_group_id.
-        existing=c.execute("SELECT id,session_group_id FROM classes WHERE date=%s AND time=%s AND mode=%s AND place=%s AND status IN ('scheduled','rescheduled','postponed','attended') ORDER BY id LIMIT 1",(d,t,mode,place)).fetchone()
+        existing=c.execute("SELECT id,session_group_id FROM classes WHERE date=%s AND time=%s AND mode=%s AND place=%s AND student_id<>%s AND status IN ('scheduled','rescheduled','postponed','attended') ORDER BY id LIMIT 1",(d,t,mode,place,sid)).fetchone()
+        share_existing = form.get("share_existing", "no") == "yes"
+        if existing and not share_existing:
+            existing = None
         if existing and existing["session_group_id"]:
             session_group_id=existing["session_group_id"]
         elif existing:
@@ -1627,6 +1651,58 @@ def add_student_to_shared_class(class_id):
     flash(f"{student['student_name']} fue agregado a la clase compartida.")
     return redirect(url_for("edit_class",class_id=class_id))
 
+@app.route("/entrenador/clase/<int:class_id>/unir", methods=["POST"])
+@coach_required
+def merge_legacy_class(class_id):
+    """Safely merge two already-booked same-slot sessions without rewriting history."""
+    try:
+        other_id=int(request.form.get("other_class_id", ""))
+    except (TypeError,ValueError):
+        flash("Selecciona una clase válida para unir.")
+        return redirect(url_for("edit_class",class_id=class_id))
+    if other_id == class_id:
+        flash("No puedes unir una clase consigo misma.")
+        return redirect(url_for("edit_class",class_id=class_id))
+    c=db()
+    try:
+        current=c.execute("SELECT * FROM classes WHERE id=%s FOR UPDATE",(class_id,)).fetchone()
+        other=c.execute("SELECT * FROM classes WHERE id=%s FOR UPDATE",(other_id,)).fetchone()
+        if not current or not other:
+            c.rollback(); flash("No se encontraron ambas clases."); return redirect(url_for("edit_class",class_id=class_id))
+        if current["date"] != other["date"] or current["time"] != other["time"]:
+            c.rollback(); flash("Solo puedes unir clases con la misma fecha y hora exactas."); return redirect(url_for("edit_class",class_id=class_id))
+        if current["student_id"] == other["student_id"]:
+            c.rollback(); flash("Ambas clases pertenecen al mismo alumno. No se unieron para evitar duplicar su historial."); return redirect(url_for("edit_class",class_id=class_id))
+        group=current.get("session_group_id") or other.get("session_group_id") or str(uuid.uuid4())
+        group_ids=[x for x in (current.get("session_group_id"),other.get("session_group_id")) if x]
+        if group_ids:
+            members=c.execute("SELECT id,student_id FROM classes WHERE session_group_id=ANY(%s) AND status IN ('scheduled','rescheduled','postponed','attended')",(group_ids,)).fetchall()
+        else:
+            members=[]
+        unique_members={m["id"]:m for m in (members + [{"id":current["id"],"student_id":current["student_id"]},{"id":other["id"],"student_id":other["student_id"]}])}
+        seen_students=set()
+        for member in unique_members.values():
+            if member["student_id"] in seen_students:
+                c.rollback(); flash("Las sesiones ya contienen una clase del mismo alumno. No se modificó nada."); return redirect(url_for("edit_class",class_id=class_id))
+            seen_students.add(member["student_id"])
+        if group_ids:
+            c.execute("UPDATE classes SET session_group_id=%s WHERE session_group_id=ANY(%s)",(group,group_ids))
+        c.execute("UPDATE classes SET session_group_id=%s,mode=%s,place=%s WHERE id=ANY(%s)",(group,current.get("mode"),current.get("place"),[current["id"],other["id"]]))
+        c.commit()
+    except Exception:
+        c.rollback(); app.logger.exception("Legacy class merge failed: %s and %s",class_id,other_id)
+        flash("No se pudieron unir las clases. No se aplicaron cambios; revisa los registros.")
+        return redirect(url_for("edit_class",class_id=class_id))
+    finally:
+        c.close()
+    ok,error=sync_class_to_google(class_id)
+    if ok:
+        flash("Clases unidas. Se conservaron los registros individuales y se sincronizó una sola sesión.")
+    else:
+        flash("Las clases quedaron unidas en JCFC, pero Google Calendar no se pudo actualizar: "+str(error or "error de sincronización"))
+    return redirect(url_for("edit_class",class_id=class_id))
+
+
 @app.route("/entrenador/clase/<int:class_id>/editar", methods=["GET", "POST"])
 @coach_required
 def edit_class(class_id):
@@ -1668,8 +1744,13 @@ def edit_class(class_id):
         return redirect(request.form.get("return_to") or url_for("student_detail", sid=current["student_id"]))
     students=c.execute("SELECT id,student_name,age FROM students WHERE status='active' AND id<>%s ORDER BY student_name",(current["student_id"],)).fetchall()
     shared_members=c.execute("SELECT classes.id,students.student_name,students.age FROM classes JOIN students ON students.id=classes.student_id WHERE classes.session_group_id=%s AND classes.status<>'cancelled' ORDER BY students.student_name",(current.get("session_group_id"),)).fetchall() if current.get("session_group_id") else []
+    merge_candidates=c.execute("""SELECT cl.id,st.student_name FROM classes cl JOIN students st ON st.id=cl.student_id
+        WHERE cl.date=%s AND cl.time=%s AND cl.id<>%s AND cl.student_id<>%s
+          AND cl.status IN ('scheduled','rescheduled','postponed','attended')
+          AND (cl.session_group_id IS DISTINCT FROM %s OR %s IS NULL)
+        ORDER BY st.student_name,cl.id""",(current["date"],current["time"],class_id,current["student_id"],current.get("session_group_id"),current.get("session_group_id"))).fetchall()
     c.close()
-    return render_template("edit_class.html", current=current, students=students, shared_members=shared_members, return_to=request.args.get("return_to", ""))
+    return render_template("edit_class.html", current=current, students=students, shared_members=shared_members, merge_candidates=merge_candidates, return_to=request.args.get("return_to", ""), now_date=datetime.now(PERU_TZ).date().isoformat())
 
 
 @app.route("/entrenador/clase/<int:class_id>/estado", methods=["POST"])
@@ -1798,6 +1879,34 @@ def delete_class(class_id):
     c=db(); c.execute("DELETE FROM classes WHERE id=%s",(class_id,)); sync_payment_status(c,sid); c.commit(); c.close()
     flash("Clase eliminada. Los registros de pago del alumno se conservaron.")
     return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/entrenador/clases/coincidencias", methods=["GET"])
+@coach_required
+def class_schedule_matches():
+    """Return same-slot sessions so the coach can explicitly choose to share."""
+    sid=request.args.get("student_id", type=int)
+    day=request.args.get("date", "").strip()
+    time=request.args.get("time", "").strip()
+    if not sid or not day or not time:
+        return {"matches": []}
+    try:
+        date.fromisoformat(day); datetime.strptime(time, "%H:%M")
+    except ValueError:
+        return {"matches": []}, 400
+    c=db()
+    try:
+        student=c.execute("SELECT mode,place FROM students WHERE id=%s AND status='active'",(sid,)).fetchone()
+        if not student:
+            return {"matches": []}
+        rows=c.execute("""SELECT s.student_name FROM classes cl JOIN students s ON s.id=cl.student_id
+            WHERE cl.date=%s AND cl.time=%s AND cl.student_id<>%s
+              AND cl.status IN ('scheduled','rescheduled','postponed','attended')
+              AND COALESCE(cl.mode,'')=COALESCE(%s,'') AND COALESCE(cl.place,'')=COALESCE(%s,'')
+            ORDER BY s.student_name""",(day,time,sid,student.get('mode'),student.get('place'))).fetchall()
+        return {"matches": [r["student_name"] for r in rows]}
+    finally:
+        c.close()
 
 
 @app.route("/entrenador/clases/nueva", methods=["GET","POST"])
@@ -1984,6 +2093,10 @@ def edit_payment(payment_id):
             datetime.strptime(month, "%Y-%m")
             if amount <= 0 or applied_tariff <= 0 or sessions_total < 1 or sessions_total > 200:
                 raise ValueError
+            if payment.get("payment_type") == "regular":
+                expected_sessions = int((amount + 1e-7) // applied_tariff)
+                if expected_sessions >= 1 and abs(amount - expected_sessions * applied_tariff) < 0.01 and sessions_total != expected_sessions:
+                    c.close(); flash(f"El monto y la tarifa cubren {expected_sessions} clases, no {sessions_total}. Corrige la cantidad para evitar un saldo incorrecto."); return redirect(url_for("edit_payment", payment_id=payment_id))
         except (TypeError, ValueError):
             c.close(); flash("Revisa el monto, tarifa, cantidad de clases, fecha y período."); return redirect(url_for("edit_payment", payment_id=payment_id))
         try:
@@ -2044,12 +2157,12 @@ def availability():
         if action == "set_full":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET is_full=TRUE",(current_month,turn))
+                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES('global',%s,TRUE) ON CONFLICT(month,turn) DO UPDATE SET is_full=TRUE",(turn,))
                 c.commit(); c.close(); flash(f"Agenda marcada como llena para {turn.lower()}."); return redirect(url_for("availability"))
         if action == "open":
             turn=request.form.get("turn", "").strip()
             if turn in TURN_ORDER:
-                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES(%s,%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(current_month,turn))
+                c.execute("INSERT INTO availability_status(month,turn,is_full) VALUES('global',%s,FALSE) ON CONFLICT(month,turn) DO UPDATE SET is_full=FALSE",(turn,))
                 c.commit(); c.close(); flash(f"Agenda disponible nuevamente para {turn.lower()}."); return redirect(url_for("availability"))
         if action == "add_recovery":
             rdate=request.form.get("recovery_date","").strip(); rtime=request.form.get("recovery_time","").strip(); rzone=request.form.get("recovery_zone","").strip(); rplace=request.form.get("recovery_place","").strip()
@@ -2077,7 +2190,7 @@ def availability():
         c.commit(); c.close(); flash("Disponibilidad agregada."); return redirect(url_for("availability"))
     av=c.execute("""SELECT * FROM availability WHERE active=TRUE ORDER BY CASE day
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
-    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month=%s",(current_month,)).fetchall()
+    status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month='global'").fetchall()
     status={r["turn"]:bool(r["is_full"]) for r in status_rows}
     today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
     for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
@@ -2380,6 +2493,11 @@ def reschedule(class_id):
         available_slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
         if not available_slots:
             available_slots=first_month_recovery_fallback()
+        available_slots.sort(key=lambda x: (x["date"], x["time"]))
+        # Política: en la primera reprogramación del padre solo se permite
+        # la primera clase disponible del horario habitual del mes siguiente.
+        if reschedule_count == 0:
+            available_slots = available_slots[:1]
         allowed=any(x["date"]==new_date and x["time"]==new_time for x in available_slots)
         occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
         if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
@@ -2399,6 +2517,10 @@ def reschedule(class_id):
     slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
     if not slots:
         slots=first_month_recovery_fallback()
+    slots.sort(key=lambda x: (x["date"], x["time"]))
+    # En la primera reprogramación el padre solo ve una opción.
+    if reschedule_count == 0:
+        slots = slots[:1]
     c.close(); return render_template("reschedule.html",current=current,slots=slots,reschedule_count=reschedule_count,target_month=target_month)
 
 

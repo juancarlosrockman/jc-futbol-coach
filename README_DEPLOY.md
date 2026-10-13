@@ -1,4 +1,4 @@
-# JC Fútbol Coach v12.18.9
+# JC Fútbol Coach — paquete Render v12.18.14
 
 Base: v12.15.1.
 
@@ -73,3 +73,8 @@ Después del deploy, revisar la ficha de Marianito. No registrar un pago adicion
 - Revisión de la ruta de edición de pagos: bloqueo transaccional, recálculo de cobertura y ausencia de actualización de la tarifa habitual del alumno.
 
 La sincronización externa de Google Calendar depende de que las credenciales OAuth estén configuradas y autorizadas. Las pruebas locales no acceden a la base de datos ni a la cuenta de Google de producción.
+
+
+## v12.18.14 — cambios adicionales
+
+Consulta `NOTAS_VERSION_12.18.14.txt` para los cambios de confirmación de clase compartida, unión segura de reservas antiguas, persistencia de Agenda llena, validación de cantidad de clases cubierta por pagos y medición de tiempos de respuesta.
