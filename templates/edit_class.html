@@ -13,7 +13,25 @@
     <input type="hidden" name="return_to" value="{{return_to}}">
     <button class="btn green" style="width:100%">💾 Guardar corrección</button>
   </form>
+  {% if current.date >= now_date and current.status in ['scheduled','rescheduled','postponed'] %}
+  <form method="post" action="{{url_for('delete_class',class_id=current.id)}}" style="margin-top:12px" onsubmit="return confirm('¿Seguro que deseas borrar esta programación futura? Se conservarán los pagos y el historial. Si la clase es compartida, solo se quitará este alumno.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn" style="width:100%;background:#9f2525;color:white">🗑️ Borrar programación futura de este alumno</button>
+  </form>
+  {% endif %}
 </div>
+{% if merge_candidates %}
+<div class="card">
+  <h2>🧩 Unir una clase antigua</h2>
+  <p class="muted">Úsalo para consolidar dos reservas existentes de la misma fecha y hora. No borra clases ni cambia pagos, asistencia o historial; solo las agrupa como una sesión compartida. No unas reservas que no correspondan al mismo entrenamiento.</p>
+  <form method="post" action="{{url_for('merge_legacy_class',class_id=current.id)}}" onsubmit="return confirm('¿Confirmas que estas clases corresponden al mismo entrenamiento? Se conservarán los registros individuales y se sincronizará una sola sesión.');">
+    <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+    <label>Clase que deseas unir</label>
+    <select name="other_class_id" required><option value="">Escoge una clase del mismo horario</option>{% for candidate in merge_candidates %}<option value="{{candidate.id}}">{{candidate.student_name}} · clase #{{candidate.id}}</option>{% endfor %}</select>
+    <button class="btn green" type="submit">Unir sesiones seleccionadas</button>
+  </form>
+</div>
+{% endif %}
 {% if current.session_group_id %}
 <div class="card">
   <h2>👥 Clase compartida</h2>
