@@ -1881,6 +1881,92 @@ def delete_class(class_id):
     return redirect(request.referrer or url_for("dashboard"))
 
 
+@app.route("/entrenador/clase/<int:class_id>/unir-futuras", methods=["POST"])
+@coach_required
+def merge_future_shared_classes(class_id):
+    """Merge all future exact date/time matches for this student's selected partner.
+
+    Rows are retained so payment, attendance and recovery history remains individual.
+    Only the session_group_id is consolidated. Past classes are deliberately excluded.
+    """
+    try:
+        partner_id = int(request.form.get("other_student_id", ""))
+    except (TypeError, ValueError):
+        flash("Selecciona un alumno válido para unir sus clases futuras.")
+        return redirect(url_for("edit_class", class_id=class_id))
+    c = db()
+    sync_ids = []
+    merged = 0
+    skipped_conflicts = 0
+    try:
+        current = c.execute("SELECT id,student_id FROM classes WHERE id=%s", (class_id,)).fetchone()
+        partner = c.execute("SELECT id,student_name FROM students WHERE id=%s AND status='active'", (partner_id,)).fetchone()
+        if not current or not partner:
+            c.rollback()
+            flash("No se encontró la clase o el alumno seleccionado.")
+            return redirect(url_for("edit_class", class_id=class_id))
+        if current["student_id"] == partner_id:
+            c.rollback()
+            flash("Debes seleccionar a otro alumno.")
+            return redirect(url_for("edit_class", class_id=class_id))
+        today = datetime.now(PERU_TZ).date().isoformat()
+        pairs = c.execute("""SELECT a.id AS aid,b.id AS bid,a.session_group_id AS ag,b.session_group_id AS bg,
+                    a.date,a.time
+            FROM classes a JOIN classes b ON b.date=a.date AND b.time=a.time
+            WHERE a.student_id=%s AND b.student_id=%s AND a.date >= %s
+              AND a.mode IS NOT DISTINCT FROM b.mode
+              AND a.place IS NOT DISTINCT FROM b.place
+              AND a.status IN ('scheduled','rescheduled','postponed')
+              AND b.status IN ('scheduled','rescheduled','postponed')
+            ORDER BY a.date,a.time,a.id,b.id FOR UPDATE OF a,b""",
+            (current["student_id"], partner_id, today)).fetchall()
+        for pair in pairs:
+            if pair["ag"] and pair["ag"] == pair["bg"]:
+                continue
+            group_ids = list(dict.fromkeys(x for x in (pair["ag"], pair["bg"]) if x))
+            if group_ids:
+                members = c.execute("SELECT id,student_id FROM classes WHERE session_group_id=ANY(%s) AND status IN ('scheduled','rescheduled','postponed','attended') FOR UPDATE", (group_ids,)).fetchall()
+            else:
+                members = []
+            members_by_id = {m["id"]: m for m in members}
+            for row_id, student_id in ((pair["aid"], current["student_id"]), (pair["bid"], partner_id)):
+                members_by_id[row_id] = {"id": row_id, "student_id": student_id}
+            member_students = [m["student_id"] for m in members_by_id.values()]
+            if len(member_students) != len(set(member_students)):
+                skipped_conflicts += 1
+                continue
+            group_id = group_ids[0] if group_ids else str(uuid.uuid4())
+            if group_ids:
+                c.execute("UPDATE classes SET session_group_id=%s WHERE session_group_id=ANY(%s)", (group_id, group_ids))
+            c.execute("UPDATE classes SET session_group_id=%s WHERE id=ANY(%s)", (group_id, [pair["aid"], pair["bid"]]))
+            sync_ids.append(pair["aid"])
+            merged += 1
+        c.commit()
+    except Exception:
+        c.rollback()
+        app.logger.exception("Bulk future class merge failed for class %s", class_id)
+        flash("No se pudieron unir las clases futuras. No se aplicaron cambios; revisa los logs de Render.")
+        return redirect(url_for("edit_class", class_id=class_id))
+    finally:
+        c.close()
+    sync_failed = 0
+    # Sync once per newly merged future session, after the DB transaction commits.
+    for sync_id in dict.fromkeys(sync_ids):
+        ok, _ = sync_class_to_google(sync_id)
+        if not ok:
+            sync_failed += 1
+    if merged == 0 and skipped_conflicts == 0:
+        flash(f"No se encontraron clases futuras coincidentes para {partner['student_name']}; no se modificó nada.")
+    else:
+        message = f"Se unieron {merged} clase(s) futura(s) coincidente(s) con {partner['student_name']}. Se conservaron los registros individuales."
+        if skipped_conflicts:
+            message += f" {skipped_conflicts} coincidencia(s) se omitieron porque los grupos ya contienen al mismo alumno."
+        if sync_failed:
+            message += f" Google Calendar no se pudo actualizar en {sync_failed} sesión(es); revisa la pantalla de sincronización."
+        flash(message)
+    return redirect(url_for("edit_class", class_id=class_id))
+
+
 @app.route("/entrenador/clases/coincidencias", methods=["GET"])
 @coach_required
 def class_schedule_matches():

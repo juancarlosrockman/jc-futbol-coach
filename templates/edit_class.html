@@ -20,6 +20,16 @@
   </form>
   {% endif %}
 </div>
+<div class="card">
+  <h2>🧩 Unir todas las clases futuras coincidentes</h2>
+  <p class="muted">Busca fechas futuras en las que este alumno y el alumno seleccionado ya tengan una clase a la misma hora. Solo agrupa sesiones coincidentes; no borra clases ni cambia pagos, asistencias o recuperaciones. Las fechas pasadas no se modifican.</p>
+  <form method="post" action="{{url_for('merge_future_shared_classes',class_id=current.id)}}" onsubmit="return confirm('¿Unir todas las clases futuras que coincidan exactamente en fecha y hora con el alumno seleccionado? Se conservarán los registros individuales. Revisa que realmente entrenen juntos.');">
+    <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+    <label>Alumno con quien comparte las clases</label>
+    <select name="other_student_id" required><option value="">Escoge un alumno</option>{% for st in students %}<option value="{{st.id}}">{{st.student_name}} · {{st.age}} años</option>{% endfor %}</select>
+    <button class="btn green" type="submit">Unir clases futuras coincidentes</button>
+  </form>
+</div>
 {% if merge_candidates %}
 <div class="card">
   <h2>🧩 Unir una clase antigua</h2>

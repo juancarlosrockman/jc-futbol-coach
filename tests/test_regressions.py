@@ -79,3 +79,15 @@ def test_regular_payment_amount_rate_must_match_class_count():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "expected_sessions = int((amount + 1e-7) // applied_tariff)" in source
     assert "El monto y la tarifa cubren" in source
+
+
+def test_bulk_future_shared_merge_route_and_ui_exist():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "edit_class.html").read_text(encoding="utf-8")
+    assert 'def merge_future_shared_classes(class_id):' in source
+    assert 'a.date >= %s' in source
+    assert 'a.mode IS NOT DISTINCT FROM b.mode' in source
+    assert 'a.place IS NOT DISTINCT FROM b.place' in source
+    assert 'FOR UPDATE OF a,b' in source
+    assert 'Unir clases futuras coincidentes' in template
+    assert 'No se modificó nada.' in source

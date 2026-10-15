@@ -1,0 +1,22 @@
+JC FÚTBOL COACH — VERSIÓN 12.18.15
+
+BASE
+- Paquete Render 12.18.14.
+
+CAMBIO NUEVO
+- Se añade una herramienta para unir en lote las clases futuras que coincidan exactamente por fecha y hora entre el alumno de la ficha y otro alumno elegido.
+- Solo agrupa las filas mediante session_group_id; no elimina clases ni reescribe pagos, asistencias, recuperaciones o historial.
+- Excluye las fechas pasadas. Si los grupos combinados contienen al mismo alumno más de una vez, omite esa coincidencia para evitar corrupción de datos.
+- Después de confirmar la transacción local, intenta sincronizar cada sesión afectada con Google Calendar y comunica los fallos sin ocultarlos.
+
+VALIDACIÓN LOCAL
+- Pruebas automatizadas incluidas: 10 aprobadas (contratos de código y parseo, no pruebas de integración con servicios reales).
+- Se deben ejecutar además las verificaciones indicadas al entregar el paquete.
+
+LIMITACIONES
+- No se conectó a la base de datos de producción ni a Google Calendar real.
+- El HTTP 500 de Google Calendar no se puede atribuir a una causa específica sin revisar los logs de Render del momento del error. Esta versión no afirma haberlo solucionado.
+- No se modificaron datos ni se desplegó nada en producción.
+
+DESPLIEGUE
+- Subir el contenido de la carpeta src al repositorio conectado a Render, manteniendo la estructura. Conservar DATABASE_URL, SECRET_KEY y las variables OAuth existentes.
