@@ -1030,8 +1030,9 @@ def current_student_slots(c, student, today=None, horizon_days=45):
 def class_status_label(status):
     return {
         "scheduled": "Programada",
-        "attended": "Asistida",
-        "postponed": "Postergada — pendiente de reprogramación",
+        "attended": "Asistió",
+        "absent": "No asistió",
+        "postponed": "Reprogramada",
         "rescheduled": "Reprogramada",
         "cancelled": "Cancelada",
     }.get(status, status or "Programada")
@@ -1588,7 +1589,7 @@ def student_detail(sid):
     for p in payments:
         if p["payment_type"] == "package_8":
             assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
-            attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'", (p["id"],)).fetchone()["n"]
+            attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status IN ('attended','absent')", (p["id"],)).fetchone()["n"]
             packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
     c.close(); return render_template("student_detail.html", s=s, classes=classes, period_classes=period_classes, upcoming=upcoming, history=history, current_month=current_month, payments=payments, packages=packages, summary=summary, last_work=last_work, current_paid=current_paid, current_pending=current_pending, current_recoveries=current_recoveries)
 
@@ -1757,7 +1758,7 @@ def edit_class(class_id):
 @coach_required
 def update_class_status(class_id):
     status=request.form.get("status","").strip()
-    allowed={"scheduled","attended","postponed","rescheduled","cancelled"}
+    allowed={"scheduled","attended","absent","rescheduled"}
     if status not in allowed: flash("Estado no válido."); return redirect(request.referrer or url_for("dashboard"))
     c=db(); row=c.execute("SELECT * FROM classes WHERE id=%s",(class_id,)).fetchone()
     if not row: c.close(); flash("Clase no encontrada."); return redirect(url_for("dashboard"))
@@ -1777,7 +1778,7 @@ def update_class_status(class_id):
         sync_payment_status(c, row["student_id"])
     else:
         c.execute("UPDATE classes SET status=%s WHERE id=%s",(status,class_id))
-        if status=="attended" and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
+        if status in ("attended", "absent") and row["payment_id"]: c.execute("UPDATE classes SET payment_status='paid' WHERE id=%s",(class_id,))
         sync_payment_status(c, row["student_id"])
     c.commit(); c.close()
     if status == "cancelled":
@@ -2090,7 +2091,7 @@ def payments():
     package_info=[]
     for p in rows:
         if p["payment_type"]=="package_8":
-            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status='attended'",(p["id"],)).fetchone()["n"]
+            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status IN ('attended','absent')",(p["id"],)).fetchone()["n"]
             package_info.append((p["id"],used,max(0,(p["sessions_total"] or 8)-used)))
     paid=sum(float(r["amount"] or 0) for r in rows if r["status"]=="paid")
     current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
@@ -2143,9 +2144,9 @@ def delete_payment(payment_id):
     # A payment referenced by a cancelled source class may be the only proof of
     # entitlement to a recovery. Refuse deletion rather than break that history.
     recovery_ref=c.execute("SELECT id FROM classes WHERE recovery_payment_id=%s LIMIT 1",(payment_id,)).fetchone()
-    attended_ref=c.execute("SELECT id FROM classes WHERE payment_id=%s AND status='attended' LIMIT 1",(payment_id,)).fetchone()
+    attended_ref=c.execute("SELECT id FROM classes WHERE payment_id=%s AND status IN ('attended','absent') LIMIT 1",(payment_id,)).fetchone()
     if recovery_ref or attended_ref:
-        reason = "una recuperación" if recovery_ref else "una clase ya asistida"
+        reason = "una recuperación" if recovery_ref else "una clase ya realizada o marcada como inasistencia"
         c.close(); flash(f"No se puede eliminar este pago porque está vinculado a {reason}. Edita el pago para corregirlo y conservar el historial.")
         return redirect(url_for("payments",month=payment["month"]))
     try:
@@ -2506,108 +2507,55 @@ def parent_request_class():
     c.close()
     return render_template("parent_request.html",children=children,selected=selected,slots=slots)
 
-@app.route("/alumno/clase/<int:class_id>/reprogramar", methods=["GET","POST"])
+@app.route("/alumno/clase/<int:class_id>/reprogramar", methods=["GET", "POST"])
 def reschedule(class_id):
-    if session.get("role")!="parent": return redirect(url_for("parent_login"))
-    c=db(); current=c.execute("""SELECT classes.*,students.student_name,students.zone AS student_zone,students.parent_name
-        FROM classes JOIN students ON students.id=classes.student_id WHERE classes.id=%s AND students.user_id=%s""",(class_id,session["user_id"])).fetchone()
-    if not current: c.close(); flash("Clase no encontrada."); return redirect(url_for("parent_home"))
-    # La reprogramación directa se aplica a la próxima clase del alumno seleccionado,
-    # no a la próxima clase global de toda la cuenta. Esto permite que una familia
-    # con varios hijos gestione correctamente a cada alumno.
-    next_class=c.execute("""SELECT classes.id FROM classes
-        WHERE classes.student_id=%s AND classes.date>=%s
-        AND classes.status IN ('scheduled','rescheduled','postponed')
-        ORDER BY classes.date,classes.time,classes.id LIMIT 1""",(current["student_id"],datetime.now(PERU_TZ).date().isoformat())).fetchone()
-    if not next_class or next_class["id"]!=class_id:
-        c.close(); flash("Esta no es la próxima clase de este alumno. La reprogramación directa corresponde a su próxima clase."); return redirect(url_for("parent_home"))
-    # A parent gets one reprogramming opportunity. Once the class has been
-    # reprogrammed, it must not be offered again. The coach can still use the
-    # coach-side controls for exceptional changes.
-    if current["status"] not in ("scheduled","postponed") or int(current.get("parent_reschedule_count") or 0) > 0:
-        c.close(); flash("Esta clase ya fue reprogramada y no puede volver a reprogramarse desde la cuenta del padre/madre."); return redirect(url_for("parent_home"))
-    try: original_dt=parse_iso_datetime(current["date"],current["time"])
-    except ValueError: c.close(); flash("No se pudo validar la fecha."); return redirect(url_for("parent_home"))
-    now=datetime.now(PERU_TZ)
-    if current["status"] != "postponed" and now >= original_dt-timedelta(hours=2):
-        c.close(); return redirect(url_for("contacto_whatsapp",mensaje="Hola, Coach Juan Carlos. Tengo una emergencia y necesito coordinar una reprogramación de clase."))
-    today=now.date()
-    # La primera reprogramación del padre se ofrece para el siguiente mes.
-    # Desde la segunda, la recuperación queda dentro del mismo mes de la clase.
-    reschedule_count = int(current.get("parent_reschedule_count") or 0)
-    target_month = None
-    if reschedule_count == 0:
-        base = date.fromisoformat(current["date"])
-        year = base.year + (1 if base.month == 12 else 0)
-        month = 1 if base.month == 12 else base.month + 1
-        target_month = f"{year:04d}-{month:02d}"
-    else:
-        target_month = current["date"][:7]
+    """Parent-side rebooking is informational only; the coach coordinates it via WhatsApp.
 
-    def first_month_recovery_fallback():
-        # En la primera reprogramación debe existir al menos una alternativa
-        # en el mes siguiente. Si la tabla de disponibilidad no devuelve
-        # opciones, usamos el mismo día/hora habitual de la clase y buscamos
-        # la primera fecha libre de ese patrón dentro del mes siguiente.
-        if reschedule_count != 0:
-            return []
-        try:
-            original_date = date.fromisoformat(current["date"])
-            original_time = current["time"]
-            weekday = original_date.weekday()
-            year, month = map(int, target_month.split("-"))
-            first_day = date(year, month, 1)
-            d = first_day + timedelta(days=(weekday - first_day.weekday()) % 7)
-            while d.month == month:
-                occupied = c.execute(
-                    "SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",
-                    (d.isoformat(), original_time, class_id)
-                ).fetchone()
-                if not occupied:
-                    return [{"date":d.isoformat(),"day":DAYS[d.weekday()],"time":original_time,
-                             "zone":(current["student_zone"] or "").strip(),"turn":turn_for_time(original_time),"kind":"fallback"}]
-                d += timedelta(days=7)
-        except Exception:
-            return []
-        return []
+    No class, payment, package, recovery slot, or Google Calendar event is changed
+    from this route. The coach records any agreed recovery in the coach panel.
+    """
+    if session.get("role") != "parent":
+        return redirect(url_for("parent_login"))
+    c = db()
+    current = c.execute("""SELECT classes.*, students.student_name,
+            students.zone AS student_zone, students.parent_name,
+            students.place AS student_place
+        FROM classes JOIN students ON students.id=classes.student_id
+        WHERE classes.id=%s AND students.user_id=%s""",
+        (class_id, session["user_id"])).fetchone()
+    if not current:
+        c.close()
+        flash("Clase no encontrada.")
+        return redirect(url_for("parent_home"))
 
-    if request.method=="POST":
-        new_date=request.form.get("date","").strip(); new_time=request.form.get("time","").strip(); zone=(current["student_zone"] or "").strip()
-        try: selected=date.fromisoformat(new_date); selected_day=DAYS[selected.weekday()]
-        except (ValueError,IndexError): c.close(); flash("La fecha seleccionada no es válida."); return redirect(url_for("reschedule",class_id=class_id))
-        if selected<today: c.close(); flash("La nueva fecha no puede ser anterior a hoy."); return redirect(url_for("reschedule",class_id=class_id))
-        available_slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
-        if not available_slots:
-            available_slots=first_month_recovery_fallback()
-        available_slots.sort(key=lambda x: (x["date"], x["time"]))
-        # Política: en la primera reprogramación del padre solo se permite
-        # la primera clase disponible del horario habitual del mes siguiente.
-        if reschedule_count == 0:
-            available_slots = available_slots[:1]
-        allowed=any(x["date"]==new_date and x["time"]==new_time for x in available_slots)
-        occupied=c.execute("SELECT 1 FROM classes WHERE date=%s AND time=%s AND status IN ('scheduled','rescheduled') AND id<>%s LIMIT 1",(new_date,new_time,class_id)).fetchone()
-        if not allowed or occupied: c.close(); flash("Ese horario ya no está disponible para reprogramar."); return redirect(url_for("reschedule",class_id=class_id))
-        old_date=current["date"]; old_time=current["time"]
-        selected_recovery_slot=next((x for x in available_slots if x["date"]==new_date and x["time"]==new_time and x.get("kind")=="manual_recovery"),None)
-        c.execute("UPDATE classes SET date=%s,time=%s,status='rescheduled',parent_reschedule_count=COALESCE(parent_reschedule_count,0)+1,original_date=COALESCE(original_date,%s),original_time=COALESCE(original_time,%s),recovery_slot_id=%s WHERE id=%s",(new_date,new_time,old_date,old_time,selected_recovery_slot.get("recovery_slot_id") if selected_recovery_slot else None,class_id))
-        if selected_recovery_slot: c.execute("UPDATE recovery_slots SET active=FALSE WHERE id=%s",(selected_recovery_slot["recovery_slot_id"],))
-        c.execute("""INSERT INTO coach_notifications(kind,class_id,student_id,title,message)
-            VALUES(%s,%s,%s,%s,%s)""", (
-                "reschedule", class_id, current["student_id"], "Nueva reprogramación",
-                f"{current['student_name']} cambió su clase de {display_date(old_date)} · {display_time(old_time)} a {display_date(new_date)} · {display_time(new_time)} · {zone or 'Zona por indicar'}."
-            ))
-        c.commit(); c.close()
-        sync_class_to_google(class_id)
-        message=(f"⚽ Hola, Coach Juan Carlos.\n\nSe reprogramó una clase desde la app.\n\nAlumno: {current['student_name']}\nZona: {zone}\nClase anterior: {display_date(old_date)} · {display_time(old_time)}.\nNueva fecha: {selected_day.lower()} {selected.day} de {selected.strftime('%B').lower()} de {selected.year}.\nNueva hora: {display_time(new_time)}.\n\nLa solicitud fue realizada desde la aplicación de JC Fútbol Coach.")
-        return render_template("rescheduled.html",current=current,old_date=old_date,new_date=new_date,new_time=new_time,zone=zone,whatsapp_url=f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}")
-    slots=[x for x in reschedule_slots(c,current,today) if x["date"][:7] == target_month]
-    if not slots:
-        slots=first_month_recovery_fallback()
-    slots.sort(key=lambda x: (x["date"], x["time"]))
-    # En la primera reprogramación el padre solo ve una opción.
-    if reschedule_count == 0:
-        slots = slots[:1]
-    c.close(); return render_template("reschedule.html",current=current,slots=slots,reschedule_count=reschedule_count,target_month=target_month)
+    # Only the student's next upcoming class can open this information page.
+    next_class = c.execute("""SELECT id FROM classes
+        WHERE student_id=%s AND date >= %s
+          AND status IN ('scheduled','rescheduled','postponed')
+        ORDER BY date,time,id LIMIT 1""",
+        (current["student_id"], datetime.now(PERU_TZ).date().isoformat())).fetchone()
+    if not next_class or next_class["id"] != class_id:
+        c.close()
+        flash("La coordinación de reprogramación corresponde a la próxima clase de este alumno.")
+        return redirect(url_for("parent_home"))
+
+    # A class already reprogrammed cannot be reprogrammed again by the parent.
+    if current["status"] == "rescheduled" or int(current.get("parent_reschedule_count") or 0) > 0:
+        c.close()
+        flash("Esta clase ya fue reprogramada y no puede volver a reprogramarse.")
+        return redirect(url_for("parent_home"))
+
+    message = (
+        "Hola, Coach Juan Carlos. Quisiera coordinar la reprogramación de una clase.\n\n"
+        f"Alumno: {current['student_name']}\n"
+        f"Clase programada: {display_date(current['date'])} · {display_time(current['time'])}\n"
+        f"Zona: {current.get('student_zone') or 'Por indicar'}\n\n"
+        "Entiendo que la primera reprogramación pasa al mes siguiente y que debo coordinar el horario contigo."
+    )
+    c.close()
+    whatsapp_url = f"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}"
+    return render_template("reschedule.html", current=current, slots=[], coach_mode=False,
+        whatsapp_url=whatsapp_url)
 
 
 

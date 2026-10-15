@@ -11,28 +11,20 @@
     {% if shared_count and shared_count > 1 %}<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="move_group" value="yes" checked style="width:auto;margin:0"> Reprogramar toda la clase compartida ({{shared_count}} alumnos)</label><p class="small muted">Desmarca esta opción si quieres mover solo a este alumno.</p>{% endif %}<button class="btn green" style="width:100%;margin-top:14px" type="submit">Guardar reprogramación</button>
   </form>
   {% else %}
-  <div class="eyebrow">ALUMNO ACTUAL</div><h1>Reprogramar clase</h1>
-  <div class="notice"><b>Clase actual</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or 'Lugar por indicar'}}</div>
+  <div class="eyebrow">ALUMNO ACTUAL</div><h1>Coordinar reprogramación</h1>
+  <div class="notice"><b>Clase programada</b><br>{{display_day(current.date)}} {{display_date(current.date)}} · {{display_time(current.time)}}<br>{{current.place or current.student_place or 'Lugar por indicar'}}</div>
   <div class="notice" style="margin-top:10px">
-    <b>🔄 Indicaciones para reprogramar</b><br><br>
-    • Puedes realizar una <b>primera reprogramación hasta 2 horas antes</b> del inicio de la clase.<br>
-    • En la <b>primera reprogramación</b>, se te mostrará la opción de pasar la clase al <b>siguiente mes</b>, según los horarios disponibles.<br>
-    • <b>A partir de la segunda reprogramación</b>, la clase deberá recuperarse <b>dentro del mismo mes</b>, coordinando con Coach Juan Carlos según los horarios disponibles.<br>
-    • Si no hubiera un horario disponible, <b>Coach Juan Carlos te informará si se libera un espacio</b>.<br>
-    • Si tienes una emergencia dentro de las 2 horas previas, comunícate directamente con <b>Coach Juan Carlos por WhatsApp</b>.<br>
-    • <b>Si Coach Juan Carlos ya se encuentra llegando al lugar de entrenamiento, la clase se considera programada y realizada.</b>
+    <b>🔄 Reglas de reprogramación</b><br><br>
+    • Solicita la reprogramación con al menos <b>2 horas de anticipación</b>.<br>
+    • La <b>primera reprogramación</b> pasa al <b>mes siguiente</b>, siempre coordinando previamente con Coach Juan Carlos según la disponibilidad de la agenda.<br>
+    • <b>A partir de la segunda reprogramación</b>, la recuperación debe realizarse <b>dentro del mismo mes</b>, en un horario a coordinar según la agenda.<br>
+    • Una clase que ya fue reprogramada <b>no puede volver a reprogramarse</b> por motivos de organización de la agenda.<br>
+    • Si Coach Juan Carlos cancela por un imprevisto de <b>fuerza mayor, la clase siempre se recupera</b>.<br>
+    • Si no hay un horario disponible, debes coordinar directamente con el coach; la app no reserva horarios automáticamente.<br>
+    • Si tienes una emergencia dentro de las 2 horas previas, comunícate directamente por WhatsApp.<br>
+    • Si Coach Juan Carlos ya está llegando al lugar de entrenamiento, la clase se considera programada y realizada.
   </div>
-  {% if slots %}
-  <h2 style="margin-top:18px">{% if reschedule_count == 0 %}Opciones para el siguiente mes{% else %}Opciones de recuperación para este mes{% endif %}</h2>
-  <form method="post" id="resForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="slot-list">{% for x in slots %}<label class="slot"><span><input type="radio" name="slot" value="{{x.date}}|{{x.time}}" onchange="pick('{{x.date}}','{{x.time}}')"> <b>{{x.day}} {{display_date(x.date)}}</b><br><small style="margin-left:23px">{{display_time(x.time)}} · {{x.turn}}{% if x.place %} · {{x.place}}{% endif %}</small></span></label>{% endfor %}</div>
-    <input type="hidden" name="date" id="date"><input type="hidden" name="time" id="time">
-    <button class="btn green" type="submit">Confirmar nueva fecha</button>
-  </form>
-  {% else %}
-  <div class="notice" style="margin-top:12px">No hay un espacio de recuperación disponible para esta reprogramación.</div>
-  <a class="btn green" href="{{url_for('contacto_whatsapp',mensaje='Hola, Coach Juan Carlos. Necesito coordinar la reprogramación de una clase.')}}">📲 Coordinar con Coach Juan Carlos</a>
-  {% endif %}
-</div><script>function pick(d,t){document.getElementById('date').value=d;document.getElementById('time').value=t}</script>
+  <p class="muted" style="margin-top:12px">La solicitud no modifica tu clase ni tus pagos. La recuperación quedará registrada cuando Coach Juan Carlos la coordine desde su panel.</p>
+  <a class="btn green" style="display:block;text-align:center;margin-top:14px" href="{{whatsapp_url}}">📲 Coordinar con Coach Juan Carlos por WhatsApp</a>
   {% endif %}
 {% endblock %}

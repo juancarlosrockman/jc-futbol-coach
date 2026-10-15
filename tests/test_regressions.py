@@ -34,7 +34,7 @@ def test_payment_delete_has_history_guards():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert 'def delete_payment(payment_id):' in source
     assert 'recovery_payment_id=%s LIMIT 1' in source
-    assert "status='attended' LIMIT 1" in source
+    assert "status IN ('attended','absent') LIMIT 1" in source
     assert 'c.rollback(); app.logger.exception("Payment deletion failed' in source
 
 
@@ -91,3 +91,48 @@ def test_bulk_future_shared_merge_route_and_ui_exist():
     assert 'FOR UPDATE OF a,b' in source
     assert 'Unir clases futuras coincidentes' in template
     assert 'No se modificó nada.' in source
+
+
+def test_attendance_has_attended_and_absent_states():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    dashboard = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    detail = (ROOT / "templates" / "student_detail.html").read_text(encoding="utf-8")
+    assert '"absent": "No asistió"' in source
+    assert '"attended", "absent"' in source
+    assert 'value="absent"' in dashboard
+    assert 'value="absent"' in detail
+    assert "status IN ('attended','absent')" in source
+
+
+def test_parent_rebooking_only_shows_rules_and_whatsapp_no_self_booking():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "reschedule.html").read_text(encoding="utf-8")
+    route = source.split('@app.route("/alumno/clase/<int:class_id>/reprogramar"', 1)[1].split('@app.route("/entrenador/clase/<int:class_id>/reprogramar"', 1)[0]
+    assert "whatsapp_url = f\"https://wa.me/{COACH_WHATSAPP}?text={quote(message)}\"" in route
+    assert "return render_template(\"reschedule.html\", current=current, slots=[], coach_mode=False" in route
+    assert "c.execute(\"UPDATE classes" not in route
+    assert "INSERT INTO coach_notifications" not in route
+    assert "primera reprogramación</b> pasa al <b>mes siguiente" in template
+    assert "A partir de la segunda reprogramación" in template
+    assert "la clase siempre se recupera" in template
+    assert "no puede volver a reprogramarse" in template
+    assert "Coordinar con Coach Juan Carlos por WhatsApp" in template
+    assert "Confirmar nueva fecha" not in template
+
+
+def test_attendance_selectors_expose_exactly_four_states():
+    for name in ("dashboard.html", "student_detail.html"):
+        source = (ROOT / "templates" / name).read_text(encoding="utf-8")
+        assert 'option value="scheduled"' in source
+        assert 'option value="attended"' in source
+        assert 'option value="absent"' in source
+        assert 'option value="rescheduled"' in source
+        assert 'option value="postponed"' not in source
+        assert 'option value="cancelled"' not in source
+    app = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert 'allowed={"scheduled","attended","absent","rescheduled"}' in app
+
+
+def test_whatsapp_coach_number_is_configured():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert 'COACH_WHATSAPP = "51993757225"' in source

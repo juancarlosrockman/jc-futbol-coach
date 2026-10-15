@@ -1,0 +1,16 @@
+JC FÚTBOL COACH — VERSIÓN 12.18.17
+
+CAMBIO: REPROGRAMACIONES COORDINADAS POR EL COACH
+- El panel de padres muestra las reglas y un botón a WhatsApp con alumno, fecha y hora prellenados.
+- El padre ya no puede seleccionar un horario ni confirmar una reprogramación desde la app.
+- La vista de solicitud no modifica clases, pagos, paquetes, recuperaciones ni Google Calendar.
+- La primera recuperación se coordina para el mes siguiente.
+- Desde la segunda reprogramación, la recuperación se coordina dentro del mismo mes.
+- Una clase ya reprogramada no se puede reprogramar otra vez desde el panel del padre.
+- Si el coach cancela por fuerza mayor, la clase siempre debe recuperarse; el coach la registra desde su panel.
+- Se conserva la coordinación manual de recuperaciones desde el panel del coach.
+
+VALIDACIÓN
+- La validación automatizada se documenta en el informe de pruebas incluido en el ZIP.
+- No se modificaron datos de producción ni se desplegó la aplicación.
+- No se ha validado la sincronización real con Google Calendar ni PostgreSQL de producción.

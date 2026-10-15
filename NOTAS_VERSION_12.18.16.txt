@@ -1,0 +1,13 @@
+JC FÚTBOL COACH — VERSIÓN 12.18.16
+
+CAMBIO NUEVO: CONTROL DE ASISTENCIA
+- Añadido el estado individual “No asistió” (absent), además de “Asistió”.
+- La etiqueta de asistencia ahora se muestra como “Asistió”.
+- Los selectores de estado en el panel del entrenador y en la ficha del alumno permiten registrar “No asistió”.
+- Las inasistencias se cuentan como clase utilizada cuando están vinculadas a un pago/paquete; no se convierten en asistencias y no modifican la asistencia de otro alumno de una sesión compartida.
+- Se protege un pago vinculado a una clase marcada “No asistió” frente a eliminación accidental, para no perder la cobertura/historial.
+
+VALIDACIÓN LOCAL
+- Añadida prueba de regresión para estados Asistió/No asistió y cobertura.
+- Las pruebas locales son comprobaciones de código/plantillas; no equivalen a una prueba de integración con PostgreSQL de producción o Google Calendar real.
+- No se modificaron datos de producción ni se desplegó la aplicación.
