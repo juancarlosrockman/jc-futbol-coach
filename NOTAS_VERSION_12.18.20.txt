@@ -1,0 +1,15 @@
+JC Fútbol Coach — v12.18.20
+
+Corrección de cobertura de pagos regulares:
+- La capacidad se recalcula desde el monto pagado y la tarifa individual efectiva cuando la división es exacta.
+- Corrige registros heredados donde sessions_total quedó menor que lo pagado (ejemplo: S/420 a S/60 = 7 clases aunque se guardaran 6).
+- Prioriza la tarifa registrada en ese pago y, si no cuadra con el monto, prueba la tarifa de corte individual y luego la tarifa habitual del alumno.
+- No modifica el monto del pago, el estado de asistencia ni el historial; al recalcular, puede asignar la clase pendiente que ya estaba cubierta.
+- Mantiene las tarifas particulares por alumno y no impone una tarifa global.
+- Los pagos de paquete conservan su cantidad de sesiones registrada.
+
+Se conserva la corrección SQL de clases compartidas y el diagnóstico seguro de errores de Google Calendar de v12.18.19.
+
+Pruebas locales: compilación Python correcta y 18 pruebas automatizadas aprobadas, incluida la regresión S/420 a S/60 = 7 clases.
+
+No se modificó GitHub, Render ni datos de producción. No se ha probado contra la base de datos de producción ni sincronizado realmente con Google Calendar.

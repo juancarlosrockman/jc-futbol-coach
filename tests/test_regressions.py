@@ -149,3 +149,31 @@ def test_google_oauth_refresh_errors_are_diagnosable_without_logging_secrets():
     assert 'provider_error == "invalid_grant"' in source
     assert 'provider_error == "invalid_client"' in source
     assert "client_secret" not in source.split('app.logger.error("Google OAuth token refresh rejected:', 1)[1].split("if provider_error", 1)[0]
+
+
+
+def test_regular_payment_capacity_repairs_underreported_sessions_from_individual_rate():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper_node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_payment_session_capacity")
+    namespace = {}
+    exec(compile(ast.Module(body=[helper_node], type_ignores=[]), "app.py", "exec"), namespace)
+    capacity = namespace["_payment_session_capacity"]
+    payment = {"payment_type": "regular", "amount": 420, "sessions_total": 6, "applied_tariff": 60}
+    assert capacity(payment, tariff=55, break_tariff=60) == 7
+    # If the old payment tariff is absent or inconsistent, use the student's
+    # own break tariff; do not impose a universal rate on all students.
+    payment["applied_tariff"] = None
+    assert capacity(payment, tariff=55, break_tariff=60) == 7
+    # Package payments keep their explicit package session count.
+    package = {"payment_type": "package_8", "amount": 420, "sessions_total": 8}
+    assert capacity(package, tariff=60, break_tariff=60) == 8
+
+
+def test_google_oauth_callback_does_not_sync_all_classes_inline():
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
+    callback = source.split('@app.route("/oauth/google/callback")', 1)[1].split('@app.route("/entrenador/google-calendar/desconectar"', 1)[0]
+    assert "for item in ids" not in callback
+    assert "sync_class_to_google(item[\"id\"])" not in callback
+    assert "Google Calendar quedó autorizado" in callback

@@ -739,24 +739,49 @@ def refresh_all_active_period_pricing(c, student_id=None):
         for m in months:
             if m["month"]: refresh_period_pricing(c,st["id"],m["month"])
 
+def _payment_session_capacity(payment, tariff, break_tariff=0):
+    """Return class capacity for a payment, repairing undercounted legacy rows.
+
+    Only regular payments infer capacity from amount/rate, and only when the
+    division is exact. Package capacity continues to use its saved session
+    count. Rates are individual to this student/payment, never global.
+    """
+    if payment.get("payment_type") != "regular":
+        return int(payment.get("sessions_total") or 8)
+    amount=float(payment.get("amount") or 0)
+    stored_cap=int(payment.get("sessions_total") or 0)
+    rates=[]
+    for raw_rate in (payment.get("applied_tariff"), break_tariff, tariff):
+        try: rate=float(raw_rate or 0)
+        except (TypeError, ValueError): rate=0
+        if rate>0 and all(abs(rate-existing)>0.001 for existing in rates): rates.append(rate)
+    for rate in rates:
+        sessions=round(amount/rate) if rate else 0
+        if sessions>=1 and abs(amount-sessions*rate)<0.01:
+            return int(sessions)
+    return stored_cap or (int(amount//float(tariff)) if float(tariff or 0)>0 else 0)
+
+
 def sync_payment_status(c, student_id=None):
     """Link scheduled classes to the correct monthly payment.
 
     Normal classes are covered only by the payment for their calendar month.
     Recovery classes use the month/payment of their original class, so a
     September recovery scheduled in October never consumes October's payment.
+
+    For regular payments, the paid amount and the effective per-class tariff
+    are authoritative when they divide exactly. This repairs legacy rows whose
+    sessions_total was saved too low (for example S/420 at S/60 saved as six
+    sessions), without changing the payment amount or any attendance history.
     """
-    students=c.execute("SELECT id,tariff FROM students WHERE status='active'" + (" AND id=%s" if student_id else ""), ((student_id,) if student_id else ())).fetchall()
+    students=c.execute("SELECT id,tariff,break_tariff FROM students WHERE status='active'" + (" AND id=%s" if student_id else ""), ((student_id,) if student_id else ())).fetchall()
     for st in students:
-        sid=st["id"]; tariff=float(st["tariff"] or 0)
+        sid=st["id"]; tariff=float(st["tariff"] or 0); break_tariff=float(st.get("break_tariff") or 0)
         c.execute("UPDATE classes SET payment_status='paid' WHERE student_id=%s AND payment_id IS NOT NULL", (sid,))
-        payments=c.execute("SELECT id,month,amount,sessions_total,payment_type FROM payments WHERE student_id=%s AND status='paid' ORDER BY id", (sid,)).fetchall()
+        payments=c.execute("SELECT id,month,amount,sessions_total,payment_type,applied_tariff FROM payments WHERE student_id=%s AND status='paid' ORDER BY id", (sid,)).fetchall()
         capacity={}
         for p in payments:
-            if p["payment_type"]=='regular':
-                cap=int(p["sessions_total"] or ((float(p["amount"] or 0)//tariff) if tariff>0 else 0))
-            else:
-                cap=int(p["sessions_total"] or 8)
+            cap=_payment_session_capacity(p, tariff, break_tariff)
             used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status<>'cancelled'", (p["id"],)).fetchone()["n"]
             capacity[p["id"]]={"payment":p,"remaining":max(0,cap-used)}
 
@@ -2722,10 +2747,13 @@ def google_calendar_callback():
         tokens=token_response.json()
         c=db()
         existing=_google_setting(c,session["user_id"])
+        # On reconnect, prefer the new refresh token returned after consent. Reuse an
+        # existing token only when Google omits a replacement; never make calendar API
+        # calls or sync the whole schedule inside the OAuth callback request.
         refresh=tokens.get("refresh_token") or (_token_decrypt(existing.get("refresh_token")) if existing else None)
         if not refresh:
             c.close()
-            flash("Google no devolvió permiso de actualización. Desconecta el acceso de la app en tu cuenta Google y vuelve a conectar.")
+            flash("Google no devolvió permiso de actualización. Revoca el acceso anterior de JC Fútbol Coach en tu cuenta Google y vuelve a autorizar.")
             return redirect(url_for("google_calendar_settings"))
         expiry=datetime.now(PERU_TZ).replace(tzinfo=None)+timedelta(seconds=int(tokens.get("expires_in",3600)))
         c.execute("""INSERT INTO google_calendar_settings(coach_user_id,access_token,refresh_token,token_expiry)
@@ -2733,22 +2761,10 @@ def google_calendar_callback():
             access_token=EXCLUDED.access_token,refresh_token=EXCLUDED.refresh_token,token_expiry=EXCLUDED.token_expiry,updated_at=CURRENT_TIMESTAMP""",
             (session["user_id"],_token_encrypt(tokens.get("access_token")),_token_encrypt(refresh),expiry))
         c.commit()
-        setting=_google_setting(c,session["user_id"])
-        _ensure_google_calendar(c,setting)
-        c.commit(); c.close()
-        # Backfill all active/future classes. This also initializes events for existing schedule.
-        c=db()
-        ids=c.execute("SELECT id,session_group_id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
         c.close()
-        ok=0; failed=0
-        for item in ids:
-            success, _ = sync_class_to_google(item["id"])
-            ok += 1 if success else 0
-            failed += 0 if success else 1
-        if failed:
-            flash(f"Google Calendar conectado. {ok} clase(s) sincronizada(s); {failed} quedaron pendientes de sincronización.")
-        else:
-            flash(f"Google Calendar conectado. {ok} clase(s) sincronizada(s) correctamente.")
+        # Keep OAuth callback short: syncing all classes here can exceed the web
+        # request timeout and make a successful authorization appear as Internal Server Error.
+        flash("Google Calendar quedó autorizado. Ahora puedes usar «Sincronizar» para sincronizar las clases sin bloquear la conexión.")
     except Exception as exc:
         app.logger.exception("Google OAuth callback failed: %s",exc)
         flash("No se pudo conectar Google Calendar. Revisa las credenciales OAuth en Render.")

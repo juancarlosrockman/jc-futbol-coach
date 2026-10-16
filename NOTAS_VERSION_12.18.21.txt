@@ -1,0 +1,8 @@
+JC Fútbol Coach v12.18.21 — corrección del flujo OAuth de Google Calendar
+
+- El callback OAuth ya no crea el calendario ni recorre todas las clases sincronizándolas antes de responder.
+- Guarda los tokens y redirige rápidamente a la configuración; la sincronización masiva queda en la acción separada «Sincronizar».
+- Esto evita que una autorización correcta parezca un Internal Server Error por exceder el tiempo de una petición larga.
+- Conserva la corrección de capacidad de pagos regulares (p. ej. S/420 a S/60 = 7 sesiones) y el arreglo SQL anterior.
+
+Limitación: no se probó la conexión OAuth real ni la base PostgreSQL de producción. Si Google devuelve invalid_grant para el token guardado, se debe revocar el acceso anterior y autorizar de nuevo; el código no puede reactivar un token revocado.
