@@ -1,0 +1,13 @@
+JC Fútbol Coach — v12.18.19
+
+Incluye la corrección SQL de v12.18.18 para la consulta de clases candidatas a compartir/fusionar.
+
+Diagnóstico de Google Calendar:
+- Los registros reales de Render del 16/10/2026 muestran que Google rechaza la renovación del token al reprogramar la clase 131.
+- Ahora se registra únicamente el código de error de Google y el HTTP status, sin guardar tokens ni secretos en logs.
+- El mensaje distingue invalid_grant (reconectar Google) de invalid_client (revisar credenciales OAuth en Render).
+- Esto mejora el diagnóstico; no puede renovar por código un refresh token revocado ni corregir credenciales secretas sin la autorización/configuración correcta.
+
+Seguridad de despliegue:
+- ZIP local; no se modificó GitHub, Render ni datos de producción.
+- No se probó contra PostgreSQL de producción ni se ejecutó una sincronización real con Google Calendar.

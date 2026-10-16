@@ -1,0 +1,10 @@
+JC Fútbol Coach — v12.18.18
+
+Corrección de error HTTP 500 al abrir Editar clase:
+- La consulta de clases candidatas para compartir/fusionar usa casts explícitos a text en los parámetros opcionales de session_group_id.
+- Esto evita psycopg.errors.IndeterminateDatatype (parameter $6) observado en los registros de Render.
+
+Alcance y límites:
+- Corrección preparada en ZIP; no desplegada a Render ni aplicada a GitHub.
+- No se modificaron datos de producción.
+- La sincronización real con Google Calendar sigue pendiente de diagnóstico y prueba; esta versión no declara resuelto ese error.

@@ -94,7 +94,23 @@ def _google_refresh_access(c, setting):
         "grant_type": "refresh_token",
     }, timeout=20)
     if response.status_code >= 400:
-        raise RuntimeError("Google no pudo renovar la autorización. Desconecta y vuelve a conectar Google Calendar.")
+        # Google may reject a revoked/expired refresh token (invalid_grant) or
+        # mismatched OAuth credentials (invalid_client). Keep diagnostics to
+        # the provider error code only; never log tokens, client secrets, or
+        # the full response body.
+        try:
+            error_payload = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            error_payload = {}
+        provider_error = error_payload.get("error") if isinstance(error_payload, dict) else None
+        provider_error = str(provider_error or "unknown")[:80]
+        app.logger.error("Google OAuth token refresh rejected: http_status=%s provider_error=%s",
+                         response.status_code, provider_error)
+        if provider_error == "invalid_grant":
+            raise RuntimeError("Google rechazó la autorización guardada (invalid_grant). Desconecta y vuelve a conectar Google Calendar.")
+        if provider_error == "invalid_client":
+            raise RuntimeError("Google rechazó las credenciales OAuth (invalid_client). Revisa la configuración de Google en Render.")
+        raise RuntimeError(f"Google no pudo renovar la autorización (HTTP {response.status_code}, {provider_error}). Revisa la conexión de Google Calendar.")
     payload = response.json()
     expiry = datetime.now(PERU_TZ).replace(tzinfo=None) + timedelta(seconds=int(payload.get("expires_in",3600)))
     c.execute("UPDATE google_calendar_settings SET access_token=%s,token_expiry=%s,updated_at=CURRENT_TIMESTAMP WHERE coach_user_id=%s",
@@ -1748,7 +1764,7 @@ def edit_class(class_id):
     merge_candidates=c.execute("""SELECT cl.id,st.student_name FROM classes cl JOIN students st ON st.id=cl.student_id
         WHERE cl.date=%s AND cl.time=%s AND cl.id<>%s AND cl.student_id<>%s
           AND cl.status IN ('scheduled','rescheduled','postponed','attended')
-          AND (cl.session_group_id IS DISTINCT FROM %s OR %s IS NULL)
+          AND (CAST(%s AS text) IS NULL OR CAST(cl.session_group_id AS text) IS DISTINCT FROM CAST(%s AS text))
         ORDER BY st.student_name,cl.id""",(current["date"],current["time"],class_id,current["student_id"],current.get("session_group_id"),current.get("session_group_id"))).fetchall()
     c.close()
     return render_template("edit_class.html", current=current, students=students, shared_members=shared_members, merge_candidates=merge_candidates, return_to=request.args.get("return_to", ""), now_date=datetime.now(PERU_TZ).date().isoformat())

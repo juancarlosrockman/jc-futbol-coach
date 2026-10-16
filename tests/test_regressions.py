@@ -136,3 +136,16 @@ def test_attendance_selectors_expose_exactly_four_states():
 def test_whatsapp_coach_number_is_configured():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert 'COACH_WHATSAPP = "51993757225"' in source
+
+
+def test_edit_class_merge_candidate_query_casts_optional_session_group_parameters():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "CAST(%s AS text) IS NULL OR CAST(cl.session_group_id AS text) IS DISTINCT FROM CAST(%s AS text)" in source
+
+
+def test_google_oauth_refresh_errors_are_diagnosable_without_logging_secrets():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "Google OAuth token refresh rejected: http_status=%s provider_error=%s" in source
+    assert 'provider_error == "invalid_grant"' in source
+    assert 'provider_error == "invalid_client"' in source
+    assert "client_secret" not in source.split('app.logger.error("Google OAuth token refresh rejected:', 1)[1].split("if provider_error", 1)[0]
