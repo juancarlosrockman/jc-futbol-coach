@@ -1,0 +1,9 @@
+JC Fútbol Coach v12.18.22 — clases compartidas y deduplicación segura de Google Calendar
+
+- La unión de clases futuras de dos alumnos ya no exige que los campos modo y lugar coincidan exactamente; compara fecha/hora y conserva el modo/lugar de la sesión principal.
+- Al unir clases, se buscan eventos JCFC en el intervalo horario correspondiente y solo se consideran duplicados aquellos cuyo campo privado jcfc_class_ids contiene IDs de esa sesión.
+- La sincronización actualiza un evento canónico y elimina los otros eventos JCFC de la misma sesión; no borra eventos que no tengan IDs privados coincidentes.
+- Los registros individuales de clases, pagos, asistencia y recuperaciones se conservan.
+- No se modifica producción ni se ejecuta limpieza sobre el calendario real automáticamente; la reconciliación ocurre al usar explícitamente la acción de unir clases.
+
+Limitaciones: pruebas locales estáticas/compilación no equivalen a una prueba con la base de datos de producción ni con Google OAuth real. Después de instalar, unir primero una sesión de prueba y revisar el resultado antes de repetir en todas las fechas.

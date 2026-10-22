@@ -191,7 +191,7 @@ def _set_google_sync_state(class_id, status, error=None):
         c.close()
 
 
-def sync_class_to_google(class_id, delete=False):
+def sync_class_to_google(class_id, delete=False, dedupe_calendar=False):
     """Sync one class, using a single Google event for an entire shared session."""
     c = db()
     try:
@@ -220,6 +220,25 @@ def sync_class_to_google(class_id, delete=False):
             all_group_rows = c.execute("SELECT id,google_event_id FROM classes WHERE id=%s", (class_id,)).fetchall()
         calendar_id = setting.get("calendar_id") or _ensure_google_calendar(c, setting)
         event_ids = list(dict.fromkeys(r.get("google_event_id") for r in all_group_rows if r.get("google_event_id")))
+        # During an explicit merge, reconcile orphaned/duplicate JCFC events in the
+        # same time slot. Older versions could create separate events whose IDs were
+        # not consistently written back to every class row. Only touch events whose
+        # private jcfc_class_ids overlaps this exact session's active class IDs.
+        if dedupe_calendar and rows:
+            session_ids = {str(member["id"]) for member in rows}
+            event_payload = _calendar_event_payload(rows[0], rows)
+            start_dt = parse_iso_datetime(rows[0]["date"], rows[0]["time"])
+            end_dt = datetime.fromisoformat(event_payload["end"]["dateTime"])
+            listed = _google_api(c, setting, "GET", f"/calendars/{quote(calendar_id,safe='')}/events", params={
+                "timeMin": (start_dt - timedelta(minutes=1)).isoformat(),
+                "timeMax": (end_dt + timedelta(minutes=1)).isoformat(),
+                "singleEvents": "true", "maxResults": 2500,
+            })
+            for item in listed.get("items", []):
+                private = (item.get("extendedProperties") or {}).get("private") or {}
+                item_ids = {part.strip() for part in str(private.get("jcfc_class_ids", "")).split(",") if part.strip()}
+                if item.get("id") and item_ids.intersection(session_ids) and item["id"] not in event_ids:
+                    event_ids.append(item["id"])
         if delete:
             # The caller deletes the database row only after this function returns.
             # Delete the remote event explicitly; otherwise the ordinary sync path
@@ -1737,7 +1756,7 @@ def merge_legacy_class(class_id):
         return redirect(url_for("edit_class",class_id=class_id))
     finally:
         c.close()
-    ok,error=sync_class_to_google(class_id)
+    ok,error=sync_class_to_google(class_id, dedupe_calendar=True)
     if ok:
         flash("Clases unidas. Se conservaron los registros individuales y se sincronizó una sola sesión.")
     else:
@@ -1956,8 +1975,6 @@ def merge_future_shared_classes(class_id):
                     a.date,a.time
             FROM classes a JOIN classes b ON b.date=a.date AND b.time=a.time
             WHERE a.student_id=%s AND b.student_id=%s AND a.date >= %s
-              AND a.mode IS NOT DISTINCT FROM b.mode
-              AND a.place IS NOT DISTINCT FROM b.place
               AND a.status IN ('scheduled','rescheduled','postponed')
               AND b.status IN ('scheduled','rescheduled','postponed')
             ORDER BY a.date,a.time,a.id,b.id FOR UPDATE OF a,b""",
@@ -1994,7 +2011,7 @@ def merge_future_shared_classes(class_id):
     sync_failed = 0
     # Sync once per newly merged future session, after the DB transaction commits.
     for sync_id in dict.fromkeys(sync_ids):
-        ok, _ = sync_class_to_google(sync_id)
+        ok, _ = sync_class_to_google(sync_id, dedupe_calendar=True)
         if not ok:
             sync_failed += 1
     if merged == 0 and skipped_conflicts == 0:
