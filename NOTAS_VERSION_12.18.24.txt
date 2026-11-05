@@ -1,0 +1,34 @@
+NOTA HISTÓRICA: esta versión fue reemplazada por v12.18.25. La configuración de Cron Job que se describía aquí ya no aplica. La sincronización se ejecuta dentro del servicio web existente.
+
+JC FÚTBOL COACH — v12.18.24
+Base: archivo ZIP v12.18.22 proporcionado por el usuario.
+
+CAMBIOS
+- Registro de clases: la clase, el pago opcional y la tarea de Calendar se guardan en una sola transacción PostgreSQL.
+- El navegador ya no espera la respuesta de Google al registrar clases.
+- Cola persistente en PostgreSQL; no depende de hilos en memoria.
+- Worker separado con bloqueo de tareas, protección ante ejecuciones concurrentes y reintentos progresivos.
+- Refresh OAuth con timeout de 8 segundos.
+- Dashboard: última nota de trabajo de alumnos de hoy en una sola consulta, en vez de una consulta por clase.
+- Sincronización masiva: detiene reintentos cuando el fallo indica un problema global de OAuth.
+- Se conservan los archivos, plantillas y pruebas del ZIP base.
+
+CONFIGURACIÓN OBLIGATORIA EN RENDER
+Crear un Cron Job adicional (NO sustituir el servicio web):
+- Mismo repositorio y rama que contiene esta versión.
+- Root Directory: src
+- Build Command: pip install -r requirements.txt
+- Command: python google_calendar_worker.py
+- Schedule: */1 * * * *
+- Copiar las mismas variables de entorno del servicio web, especialmente DATABASE_URL, SECRET_KEY (o la variable de clave que use el servicio) y GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI.
+El worker debe usar la misma base de datos y clave de cifrado que la web para poder leer el refresh token almacenado.
+
+DESPUÉS
+- Si la cuenta Google devuelve invalid_grant, reconectarla desde Configuración de Google Calendar en JCFC. Las tareas quedan en cola y se reintentan.
+- Verificar con una clase de prueba que se registre en JCFC y aparezca en Google Calendar.
+- Las clases que ya estaban fallidas antes de esta versión deben reintentarse desde la sincronización masiva; no se añaden retroactivamente a la cola.
+
+LÍMITES DE VALIDACIÓN
+- No se modificó GitHub, Render ni datos de producción.
+- No se probaron credenciales Google ni PostgreSQL de producción.
+- La cola y worker necesitan la configuración Cron Job descrita para sincronizar automáticamente.

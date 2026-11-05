@@ -92,7 +92,7 @@ def _google_refresh_access(c, setting):
         "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
         "refresh_token": refresh,
         "grant_type": "refresh_token",
-    }, timeout=20)
+    }, timeout=8)
     if response.status_code >= 400:
         # Google may reject a revoked/expired refresh token (invalid_grant) or
         # mismatched OAuth credentials (invalid_client). Keep diagnostics to
@@ -189,6 +189,28 @@ def _set_google_sync_state(class_id, status, error=None):
         c.commit()
     finally:
         c.close()
+
+
+def enqueue_google_calendar_sync(c, class_ids):
+    """Add one durable task per individual/shared session."""
+    ids = [int(value) for value in class_ids if value is not None]
+    if not ids:
+        return 0
+    rows = c.execute("SELECT id,session_group_id FROM classes WHERE id = ANY(%s) ORDER BY id", (ids,)).fetchall()
+    chosen, seen_groups = [], set()
+    for row in rows:
+        group_id = row.get("session_group_id")
+        if group_id:
+            if group_id in seen_groups:
+                continue
+            seen_groups.add(group_id)
+        chosen.append(row["id"])
+    for class_id in chosen:
+        c.execute("""INSERT INTO google_calendar_sync_queue(class_id) VALUES (%s)
+            ON CONFLICT (class_id) DO UPDATE SET attempts=0,
+            next_attempt_at=CURRENT_TIMESTAMP, locked_until=NULL,
+            last_error=NULL, updated_at=CURRENT_TIMESTAMP""", (class_id,))
+    return len(chosen)
 
 
 def sync_class_to_google(class_id, delete=False, dedupe_calendar=False):
@@ -370,6 +392,17 @@ def init_db():
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, month TEXT NOT NULL,
         turn TEXT NOT NULL, is_full BOOLEAN NOT NULL DEFAULT FALSE,
         UNIQUE(month, turn))""")
+    # Durable outbox: Calendar sync survives web requests and Render restarts.
+    c.execute("""CREATE TABLE IF NOT EXISTS google_calendar_sync_queue(
+        class_id INTEGER PRIMARY KEY,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        locked_until TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_google_calendar_queue_due ON google_calendar_sync_queue(next_attempt_at, locked_until)")
     c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP")
     # Existing records are treated as established students; students created from now on default to new.
     c.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS is_regular BOOLEAN NOT NULL DEFAULT TRUE")
@@ -782,49 +815,96 @@ def _payment_session_capacity(payment, tariff, break_tariff=0):
 
 
 def sync_payment_status(c, student_id=None):
-    """Link scheduled classes to the correct monthly payment.
+    """Link scheduled classes to payments using batched PostgreSQL reads.
 
-    Normal classes are covered only by the payment for their calendar month.
-    Recovery classes use the month/payment of their original class, so a
-    September recovery scheduled in October never consumes October's payment.
-
-    For regular payments, the paid amount and the effective per-class tariff
-    are authoritative when they divide exactly. This repairs legacy rows whose
-    sessions_total was saved too low (for example S/420 at S/60 saved as six
-    sessions), without changing the payment amount or any attendance history.
+    Preserves the existing rules for monthly regular payments, recovery
+    original-month matching, and package fallback for normal classes.
     """
-    students=c.execute("SELECT id,tariff,break_tariff FROM students WHERE status='active'" + (" AND id=%s" if student_id else ""), ((student_id,) if student_id else ())).fetchall()
-    for st in students:
-        sid=st["id"]; tariff=float(st["tariff"] or 0); break_tariff=float(st.get("break_tariff") or 0)
-        c.execute("UPDATE classes SET payment_status='paid' WHERE student_id=%s AND payment_id IS NOT NULL", (sid,))
-        payments=c.execute("SELECT id,month,amount,sessions_total,payment_type,applied_tariff FROM payments WHERE student_id=%s AND status='paid' ORDER BY id", (sid,)).fetchall()
-        capacity={}
-        for p in payments:
-            cap=_payment_session_capacity(p, tariff, break_tariff)
-            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status<>'cancelled'", (p["id"],)).fetchone()["n"]
-            capacity[p["id"]]={"payment":p,"remaining":max(0,cap-used)}
+    if student_id:
+        students = c.execute(
+            "SELECT id,tariff,break_tariff FROM students WHERE status='active' AND id=%s",
+            (student_id,)
+        ).fetchall()
+    else:
+        students = c.execute(
+            "SELECT id,tariff,break_tariff FROM students WHERE status='active' ORDER BY id"
+        ).fetchall()
+    if not students:
+        return
+    student_ids = [st["id"] for st in students]
 
-        pending=c.execute("""SELECT id,date,original_date,is_recovery FROM classes
-            WHERE student_id=%s AND payment_id IS NULL AND status IN ('scheduled','rescheduled','postponed')
-            ORDER BY date,time,id""", (sid,)).fetchall()
-        for cl in pending:
-            payment_month=(cl["original_date"][:7] if cl.get("is_recovery") and cl.get("original_date") else cl["date"][:7])
-            candidates=[]
+    # A single update replaces one UPDATE round-trip per student.
+    c.execute("""UPDATE classes SET payment_status='paid'
+        WHERE student_id = ANY(%s) AND payment_id IS NOT NULL""", (student_ids,))
+
+    payments = c.execute("""SELECT p.id,p.student_id,p.month,p.amount,p.sessions_total,
+            p.payment_type,p.applied_tariff,COUNT(cl.id) FILTER (WHERE cl.status<>'cancelled') AS used
+        FROM payments p
+        LEFT JOIN classes cl ON cl.payment_id=p.id
+        WHERE p.student_id = ANY(%s) AND p.status='paid'
+        GROUP BY p.id
+        ORDER BY p.student_id,p.id""", (student_ids,)).fetchall()
+    payments_by_student = {}
+    for payment in payments:
+        payments_by_student.setdefault(payment["student_id"], []).append(payment)
+
+    pending_rows = c.execute("""SELECT id,student_id,date,original_date,is_recovery
+        FROM classes
+        WHERE student_id = ANY(%s) AND payment_id IS NULL
+          AND status IN ('scheduled','rescheduled','postponed')
+        ORDER BY student_id,date,time,id""", (student_ids,)).fetchall()
+    pending_by_student = {}
+    for row in pending_rows:
+        pending_by_student.setdefault(row["student_id"], []).append(row)
+
+    assignments, still_pending = [], []
+    for st in students:
+        sid = st["id"]
+        tariff = float(st["tariff"] or 0)
+        break_tariff = float(st.get("break_tariff") or 0)
+        capacity = {}
+        for payment in payments_by_student.get(sid, []):
+            cap = _payment_session_capacity(payment, tariff, break_tariff)
+            used = int(payment.get("used") or 0)
+            capacity[payment["id"]] = {
+                "payment": payment,
+                "remaining": max(0, cap - used)
+            }
+
+        for cl in pending_by_student.get(sid, []):
+            payment_month = (
+                cl["original_date"][:7]
+                if cl.get("is_recovery") and cl.get("original_date")
+                else cl["date"][:7]
+            )
+            candidates = []
             for info in capacity.values():
-                p=info["payment"]
-                if info["remaining"]<=0 or p["payment_type"]!='regular' or p["month"]!=payment_month:
-                    continue
-                candidates.append(info)
+                payment = info["payment"]
+                if (info["remaining"] > 0
+                    and payment["payment_type"] == "regular"
+                    and payment["month"] == payment_month):
+                    candidates.append(info)
             if not candidates and not cl.get("is_recovery"):
                 for info in capacity.values():
-                    p=info["payment"]
-                    if info["remaining"]>0 and p["payment_type"]=='package_8': candidates.append(info)
+                    payment = info["payment"]
+                    if info["remaining"] > 0 and payment["payment_type"] == "package_8":
+                        candidates.append(info)
             if candidates:
-                info=candidates[0]; pid=info["payment"]["id"]
-                c.execute("UPDATE classes SET payment_id=%s,payment_status='paid' WHERE id=%s", (pid,cl["id"]))
-                info["remaining"]-=1
+                info = candidates[0]
+                assignments.append((cl["id"], info["payment"]["id"]))
+                info["remaining"] -= 1
             else:
-                c.execute("UPDATE classes SET payment_status='pending' WHERE id=%s", (cl["id"],))
+                still_pending.append(cl["id"])
+
+    if assignments:
+        class_ids = [item[0] for item in assignments]
+        payment_ids = [item[1] for item in assignments]
+        c.execute("""UPDATE classes AS cl
+            SET payment_id = v.payment_id, payment_status='paid'
+            FROM unnest(%s::integer[], %s::integer[]) AS v(class_id,payment_id)
+            WHERE cl.id=v.class_id""", (class_ids, payment_ids))
+    if still_pending:
+        c.execute("UPDATE classes SET payment_status='pending' WHERE id = ANY(%s)", (still_pending,))
 
 
 def attach_recovery_payment(c, class_id, source_class_id=None):
@@ -1286,13 +1366,21 @@ def dashboard():
     # Para cada clase de hoy, mostrar la última anotación de trabajo realizada
     # de ese mismo alumno. Esto sirve como referencia antes de iniciar la clase.
     today_with_last_work = []
+    today_student_ids = list({x["student_id"] for x in today_classes if x.get("student_id") is not None})
+    last_work_by_student = {}
+    if today_student_ids:
+        last_work_rows = c.execute("""SELECT DISTINCT ON (student_id)
+                student_id,date,time,work_notes
+            FROM classes
+            WHERE student_id = ANY(%s) AND status='attended'
+              AND work_notes IS NOT NULL AND BTRIM(work_notes)<>''
+              AND date < %s
+            ORDER BY student_id,date DESC,time DESC,id DESC""",
+            (today_student_ids, today)).fetchall()
+        last_work_by_student = {row["student_id"]: row for row in last_work_rows}
     for x in today_classes:
-        last_work = c.execute("""SELECT date,time,work_notes FROM classes
-            WHERE student_id=%s AND status='attended' AND work_notes IS NOT NULL
-              AND BTRIM(work_notes)<>'' AND date < %s
-            ORDER BY date DESC,time DESC,id DESC LIMIT 1""", (x["student_id"], today)).fetchone()
         item = dict(x)
-        item["last_work"] = last_work
+        item["last_work"] = last_work_by_student.get(x["student_id"])
         today_with_last_work.append(item)
     today_classes = today_with_last_work
     notifications = c.execute("""SELECT n.*, s.student_name
@@ -1304,36 +1392,54 @@ def dashboard():
     # Legacy classes without a payment_id are matched against paid regular
     # payments in the same calendar month, preventing false pending counts.
     pending_payments = 0
-    for s in students:
-        future = c.execute("""SELECT id,date,payment_id,payment_status FROM classes
-            WHERE student_id=%s AND date >= %s AND status IN ('scheduled','rescheduled','postponed')
-            ORDER BY date,time""", (s["id"], today)).fetchall()
-        if not future:
-            continue
-        tariff = float(s["tariff"] or 0)
-        regular_capacity = {}
-        if tariff > 0:
-            paid_regular_rows = c.execute("""SELECT month, COALESCE(SUM(amount),0) AS total
-                FROM payments WHERE student_id=%s AND status='paid' AND payment_type='regular'
-                GROUP BY month""", (s["id"],)).fetchall()
-            for p in paid_regular_rows:
-                regular_capacity[p["month"]] = int((float(p["total"] or 0)) // tariff)
-        package_remaining = 0
-        package_rows = c.execute("""SELECT id,sessions_total FROM payments
-            WHERE student_id=%s AND status='paid' AND payment_type='package_8' ORDER BY id""", (s["id"],)).fetchall()
-        for p in package_rows:
-            assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
-            package_remaining += max(0, (p["sessions_total"] or 8) - assigned)
-        for x in future:
-            if x["payment_id"] is not None or x["payment_status"] == "paid":
+    active_ids = [item["id"] for item in students]
+    if active_ids:
+        future_rows = c.execute("""SELECT id,student_id,date,payment_id,payment_status
+            FROM classes
+            WHERE student_id = ANY(%s) AND date >= %s
+              AND status IN ('scheduled','rescheduled','postponed')
+            ORDER BY student_id,date,time,id""", (active_ids, today)).fetchall()
+        future_by_student = {}
+        for row in future_rows:
+            future_by_student.setdefault(row["student_id"], []).append(row)
+        regular_rows = c.execute("""SELECT student_id,month,COALESCE(SUM(amount),0) AS total
+            FROM payments
+            WHERE student_id = ANY(%s) AND status='paid' AND payment_type='regular'
+            GROUP BY student_id,month""", (active_ids,)).fetchall()
+        regular_by_student = {}
+        for row in regular_rows:
+            regular_by_student.setdefault(row["student_id"], {})[row["month"]] = float(row["total"] or 0)
+        package_rows = c.execute("""SELECT p.student_id,p.id,p.sessions_total,
+                COUNT(cl.id) FILTER (WHERE cl.payment_id IS NOT NULL) AS assigned
+            FROM payments p
+            LEFT JOIN classes cl ON cl.payment_id=p.id
+            WHERE p.student_id = ANY(%s) AND p.status='paid' AND p.payment_type='package_8'
+            GROUP BY p.id ORDER BY p.student_id,p.id""", (active_ids,)).fetchall()
+        package_by_student = {}
+        for row in package_rows:
+            package_by_student[row["student_id"]] = package_by_student.get(row["student_id"], 0) + max(
+                0, int(row["sessions_total"] or 8) - int(row["assigned"] or 0)
+            )
+        for student in students:
+            sid = student["id"]
+            future = future_by_student.get(sid, [])
+            if not future:
                 continue
-            month = x["date"][:7]
-            if regular_capacity.get(month, 0) > 0:
-                regular_capacity[month] -= 1
-            elif package_remaining > 0:
-                package_remaining -= 1
-            else:
-                pending_payments += 1
+            tariff = float(student["tariff"] or 0)
+            regular_capacity = {
+                month: int(total // tariff) for month, total in regular_by_student.get(sid, {}).items()
+            } if tariff > 0 else {}
+            package_remaining = package_by_student.get(sid, 0)
+            for item in future:
+                if item["payment_id"] is not None or item["payment_status"] == "paid":
+                    continue
+                month = item["date"][:7]
+                if regular_capacity.get(month, 0) > 0:
+                    regular_capacity[month] -= 1
+                elif package_remaining > 0:
+                    package_remaining -= 1
+                else:
+                    pending_payments += 1
     current_month = datetime.now(PERU_TZ).strftime("%Y-%m")
     month_income = c.execute("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status='paid' AND month=%s", (current_month,)).fetchone()["total"]
     month_pending = c.execute("""SELECT COALESCE(SUM(amount),0) AS total FROM classes
@@ -2070,8 +2176,9 @@ def new_class():
             created=save_class_groups(c,sid,float(s["tariff"]),request.form)
             if not created: raise ValueError("no_classes")
             pid=save_optional_payment(c,sid,request.form,created)
-            c.commit()
             created_for_sync = list(created)
+            enqueue_google_calendar_sync(c, created_for_sync)
+            c.commit()
         except ValueError as exc:
             c.rollback(); c.close()
             msg = ("El paquete seleccionado no tiene suficientes clases disponibles." if str(exc)=="package_limit" else ("No se pudo registrar el pago. Revisa el monto." if str(exc) in ("payment_amount", "package_invalid") else ("Agrega al menos una fecha y hora válidas." if str(exc)=="invalid_class" else ("Ese horario no está disponible para reprogramar." if str(exc) in ("occupied_class", "duplicate_class") else "Agrega al menos una fecha y hora válidas."))))
@@ -2079,15 +2186,7 @@ def new_class():
         except Exception:
             c.rollback(); c.close(); flash("No se pudieron registrar las clases. Revisa los datos antes de volver a intentarlo."); return redirect(url_for("new_class",student=sid))
         c.close()
-        sync_failures = []
-        for new_class_id in created_for_sync:
-            ok, error = sync_class_to_google(new_class_id)
-            if not ok:
-                sync_failures.append(error or "Error de sincronización")
-        if sync_failures:
-            flash(f"Se registraron {len(created)} clase(s). Algunas quedaron guardadas en JCFC pero no se sincronizaron con Google Calendar. Puedes reintentarlo desde Google Calendar.")
-        else:
-            flash(f"Se registraron {len(created)} clase(s) y se sincronizaron con Google Calendar.")
+        flash(f"Se registraron {len(created)} clase(s). La sincronización con Google Calendar quedó guardada en cola para procesarse automáticamente.")
         return redirect(url_for("student_detail",sid=sid))
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall(); selected_id=request.args.get("student",type=int)
     selected=c.execute("SELECT * FROM students WHERE id=%s",(selected_id,)).fetchone() if selected_id else None
@@ -2707,10 +2806,16 @@ def google_calendar_sync_all():
             seen_groups.add(group_id)
         targets.append(item["id"])
     ok=0; failed=0
-    for class_id in targets:
-        success, _ = sync_class_to_google(class_id)
-        if success: ok += 1
-        else: failed += 1
+    for index, class_id in enumerate(targets):
+        success, error = sync_class_to_google(class_id)
+        if success:
+            ok += 1
+        else:
+            failed += 1
+            error_text = str(error or "").lower()
+            if any(marker in error_text for marker in ("invalid_grant", "invalid_client", "reconecta", "no está autorizado", "no esta autorizado")):
+                failed += max(0, len(targets) - index - 1)
+                break
     if failed:
         flash(f"Sincronización terminada: {ok} sesión(es) sincronizada(s) y {failed} con error. Revisa la conexión de Google Calendar.")
     else:
@@ -2821,6 +2926,11 @@ def internal_error(error):
     return render_template("error.html", code=500, message="Ocurrió un problema al abrir esta pantalla. Si acabas de guardar información, revisa primero la ficha antes de repetir el registro.", back_url=url_for("home")), 500
 
 
-init_db()
+if os.environ.get("JCFC_SKIP_INIT_DB") != "1":
+    init_db()
+    # Calendar tasks are processed inside the existing web service. The durable
+    # PostgreSQL queue survives restarts; no Render Cron Job is required.
+    from google_calendar_worker import start_daemon as _start_calendar_sync_daemon
+    _start_calendar_sync_daemon()
 
 if __name__ == "__main__": app.run(host="0.0.0.0",port=int(os.environ.get("PORT",5000)),debug=False)

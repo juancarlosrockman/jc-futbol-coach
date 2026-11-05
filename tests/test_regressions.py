@@ -86,8 +86,12 @@ def test_bulk_future_shared_merge_route_and_ui_exist():
     template = (ROOT / "templates" / "edit_class.html").read_text(encoding="utf-8")
     assert 'def merge_future_shared_classes(class_id):' in source
     assert 'a.date >= %s' in source
-    assert 'a.mode IS NOT DISTINCT FROM b.mode' in source
-    assert 'a.place IS NOT DISTINCT FROM b.place' in source
+    # Shared-session matching is based on exact date/time and selected students;
+    # mode/place are intentionally not hard filters because legacy records may
+    # have incomplete or differently normalized values.
+    assert 'b.date=a.date AND b.time=a.time' in source
+    assert 'a.mode IS NOT DISTINCT FROM b.mode' not in source
+    assert 'a.place IS NOT DISTINCT FROM b.place' not in source
     assert 'FOR UPDATE OF a,b' in source
     assert 'Unir clases futuras coincidentes' in template
     assert 'No se modificó nada.' in source
@@ -177,3 +181,12 @@ def test_google_oauth_callback_does_not_sync_all_classes_inline():
     assert "for item in ids" not in callback
     assert "sync_class_to_google(item[\"id\"])" not in callback
     assert "Google Calendar quedó autorizado" in callback
+
+
+def test_calendar_sync_uses_internal_daemon_without_render_cron():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    worker = (ROOT / "google_calendar_worker.py").read_text(encoding="utf-8")
+    assert "_start_calendar_sync_daemon()" in source
+    assert "threading.Thread" in worker
+    assert "FOR UPDATE SKIP LOCKED" in worker
+    assert "google_calendar_sync_queue" in worker
