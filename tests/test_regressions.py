@@ -45,10 +45,11 @@ def test_agenda_full_is_only_reopened_by_explicit_action():
     assert 'Do not clear the manually selected "agenda llena" state' in source
 
 
-def test_bulk_calendar_sync_deduplicates_shared_sessions():
+def test_bulk_calendar_enqueue_deduplicates_shared_sessions():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert 'seen_groups=set(); targets=[]' in source
-    assert 'if group_id in seen_groups:' in source
+    helper = source.split("def enqueue_google_calendar_sync", 1)[1].split("def sync_class_to_google", 1)[0]
+    assert "seen_groups" in helper
+    assert "if group_id in seen_groups:" in helper
 
 
 def test_new_booking_prompts_for_shared_session_and_can_decline():
@@ -190,3 +191,30 @@ def test_calendar_sync_uses_internal_daemon_without_render_cron():
     assert "threading.Thread" in worker
     assert "FOR UPDATE SKIP LOCKED" in worker
     assert "google_calendar_sync_queue" in worker
+
+
+def test_bulk_calendar_button_only_enqueues_and_never_calls_google_inline():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    route = source.split('@app.route("/entrenador/google-calendar/sincronizar"', 1)[1].split('@app.route("/entrenador/google-calendar")', 1)[0]
+    assert "enqueue_google_calendar_sync(c" in route
+    assert "sync_class_to_google(" not in route
+    assert "Se pusieron {queued} sesión(es) en cola" in route
+
+
+def test_enqueue_marks_individual_and_shared_classes_pending():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    helper = source.split("def enqueue_google_calendar_sync", 1)[1].split("def sync_class_to_google", 1)[0]
+    assert "INSERT INTO google_calendar_sync_queue" in helper
+    assert "UPDATE classes SET google_sync_status='pending'" in helper
+    assert "session_group_id=(" in helper
+
+
+def test_calendar_page_does_not_claim_saved_token_is_verified():
+    template = (ROOT / "templates" / "google_calendar.html").read_text(encoding="utf-8")
+    assert "La validez se confirma al realizar la sincronización" in template
+    assert "solo las pone en cola" in template
+
+
+def test_background_worker_uses_calendar_deduplication_for_retries():
+    worker = (ROOT / "google_calendar_worker.py").read_text(encoding="utf-8")
+    assert "sync_class_to_google(class_id, dedupe_calendar=True)" in worker

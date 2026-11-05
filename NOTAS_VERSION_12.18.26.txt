@@ -1,0 +1,41 @@
+JC FÚTBOL COACH — v12.18.25
+
+OBJETIVO
+Corregir la lentitud del registro de clases y mantener la sincronización automática con Google Calendar sin crear un Render Cron Job ni un segundo servicio.
+
+CAMBIOS
+- El registro de clase, el pago opcional y la tarea pendiente de Google Calendar se guardan en una sola transacción PostgreSQL.
+- La petición web ya no espera a que Google Calendar responda.
+- La cola de sincronización es persistente en PostgreSQL y sobrevive a reinicios del servicio.
+- El procesamiento se ejecuta mediante un hilo daemon dentro del servicio web existente.
+- El procesador consulta la cola periódicamente, reclama tareas con FOR UPDATE SKIP LOCKED y aplica reintentos progresivos.
+- Si Google rechaza la autorización, la clase permanece pendiente; se debe reconectar Google Calendar desde JCFC.
+- No se requiere crear un Cron Job ni configurar un segundo servicio en Render.
+- Se conservan las rutas, pantallas y datos del proyecto base.
+
+DESPLIEGUE
+- Mantener el servicio web actual de Render.
+- No crear Cron Job.
+- No cambiar variables de entorno ni la base de datos.
+- La cola se crea mediante init_db al iniciar la aplicación.
+
+VALIDACIÓN LOCAL
+- Compilación Python: correcta.
+- Pruebas automatizadas: 20 aprobadas.
+- Integridad del ZIP: se verificó al empaquetar.
+
+LÍMITES IMPORTANTES
+- No se ejecutaron pruebas conectadas a la base PostgreSQL de producción ni a las credenciales reales de Google Calendar.
+- No se modificó GitHub, Render ni ningún dato de producción.
+- La sincronización en segundo plano funciona mientras el servicio web está activo; si Render suspende el servicio, las tareas permanecen en PostgreSQL y se procesan cuando el servicio vuelva a arrancar.
+- Si la cuenta Google devuelve invalid_grant, hay que volver a autorizar Google Calendar desde JCFC.
+
+
+CORRECCIÓN v12.18.26 (sin Cron Job)
+- El botón de sincronización masiva ya no ejecuta Google Calendar dentro de la petición web.
+- Ahora encola las sesiones activas en PostgreSQL y devuelve el control inmediatamente.
+- La cola reinicia reintentos para los registros seleccionados y marca las clases individuales/compartidas como pendientes.
+- La página ya no presenta un token guardado como prueba de autorización válida.
+- El daemon interno de la aplicación procesa la cola; no requiere Cron Job ni otro servicio Render.
+- La validez real de OAuth y la comunicación con PostgreSQL/Google Calendar requieren prueba en el entorno desplegado.
+- Los reintentos del worker usan reconciliación/deduplicación de eventos JCFC antes de crear uno nuevo, para reducir el riesgo de duplicados al recuperar clases antiguas.

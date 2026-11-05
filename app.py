@@ -210,6 +210,11 @@ def enqueue_google_calendar_sync(c, class_ids):
             ON CONFLICT (class_id) DO UPDATE SET attempts=0,
             next_attempt_at=CURRENT_TIMESTAMP, locked_until=NULL,
             last_error=NULL, updated_at=CURRENT_TIMESTAMP""", (class_id,))
+        # Reflect pending state immediately in JCFC, including every member of a
+        # shared session, while the durable queue performs the remote operation.
+        c.execute("""UPDATE classes SET google_sync_status='pending', google_sync_error=NULL
+            WHERE id=%s OR (session_group_id IS NOT NULL AND session_group_id=(
+                SELECT session_group_id FROM classes WHERE id=%s))""", (class_id, class_id))
     return len(chosen)
 
 
@@ -2783,43 +2788,28 @@ def coach_reschedule(class_id):
 @app.route("/entrenador/google-calendar/sincronizar", methods=["POST"])
 @coach_required
 def google_calendar_sync_all():
-    # Keep a database/initial-query failure from surfacing as an unhandled HTTP 500.
-    # Each class sync already records its own detailed error state.
+    """Queue all active classes; never call Google inside the web request."""
+    c = None
     try:
-        c=db()
-        try:
-            ids=c.execute("SELECT id,session_group_id FROM classes WHERE status IN ('scheduled','rescheduled','postponed') ORDER BY date,time,id").fetchall()
-        finally:
-            c.close()
+        c = db()
+        setting = _google_setting(c, session["user_id"])
+        if not setting or not setting.get("refresh_token"):
+            flash("Google Calendar no está autorizado. Conecta nuevamente tu cuenta antes de sincronizar.")
+            return redirect(url_for("google_calendar_settings"))
+        ids = c.execute("""SELECT id FROM classes
+            WHERE status IN ('scheduled','rescheduled','postponed')
+            ORDER BY date,time,id""").fetchall()
+        queued = enqueue_google_calendar_sync(c, [item["id"] for item in ids])
+        c.commit()
+        flash(f"Se pusieron {queued} sesión(es) en cola para sincronizar. La aplicación las procesará automáticamente en segundo plano; puedes seguir trabajando.")
     except Exception:
-        app.logger.exception("Could not load classes for Google Calendar bulk sync")
-        flash("No se pudo iniciar la sincronización. La aplicación no modificó las clases; revisa los registros de Render.")
-        return redirect(url_for("google_calendar_settings"))
-    # Sync one representative per shared session, not every student row. This
-    # reduces redundant API calls and prevents repeated updates to the same event.
-    seen_groups=set(); targets=[]
-    for item in ids:
-        group_id=item.get("session_group_id")
-        if group_id:
-            if group_id in seen_groups:
-                continue
-            seen_groups.add(group_id)
-        targets.append(item["id"])
-    ok=0; failed=0
-    for index, class_id in enumerate(targets):
-        success, error = sync_class_to_google(class_id)
-        if success:
-            ok += 1
-        else:
-            failed += 1
-            error_text = str(error or "").lower()
-            if any(marker in error_text for marker in ("invalid_grant", "invalid_client", "reconecta", "no está autorizado", "no esta autorizado")):
-                failed += max(0, len(targets) - index - 1)
-                break
-    if failed:
-        flash(f"Sincronización terminada: {ok} sesión(es) sincronizada(s) y {failed} con error. Revisa la conexión de Google Calendar.")
-    else:
-        flash(f"Sincronización terminada: {ok} sesión(es) sincronizada(s) con Google Calendar.")
+        if c:
+            c.rollback()
+        app.logger.exception("Could not enqueue classes for Google Calendar bulk sync")
+        flash("No se pudo poner las clases en cola. No se modificaron las clases; revisa los registros de Render.")
+    finally:
+        if c:
+            c.close()
     return redirect(url_for("google_calendar_settings"))
 
 @app.route("/entrenador/google-calendar")

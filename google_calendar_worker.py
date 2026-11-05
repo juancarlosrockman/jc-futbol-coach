@@ -82,7 +82,7 @@ def run_once():
             record_result(class_id, False, auth_error, task["attempts"])
             continue
         try:
-            success, error = sync_class_to_google(class_id)
+            success, error = sync_class_to_google(class_id, dedupe_calendar=True)
         except Exception as exc:
             success, error = False, str(exc)
             logger.exception("Fallo inesperado al sincronizar clase %s", class_id)
