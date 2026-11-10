@@ -1,0 +1,21 @@
+JC Fútbol Coach v12.18.28 — Optimización de consultas y rendimiento
+
+Base: v12.18.27. Se conservan las funciones, pantallas y reglas de negocio existentes.
+
+Mejoras:
+- Pagos: los conteos de clases usadas por paquete se obtienen en una consulta agrupada, no una consulta por paquete.
+- Pagos: el recálculo de tarifas pendientes del mes usa lecturas y escrituras agrupadas por alumno, conservando las reglas de get_package_terms y el orden de clases.
+- Pagos: las clases pendientes del mes se leen en una sola consulta para todos los alumnos activos.
+- Ficha del alumno: los conteos de clases asignadas y asistidas de paquetes se consultan en bloque.
+- Disponibilidad: las sugerencias automáticas de recuperación se calculan con una lectura global de clases y un conjunto de horarios ocupados, evitando consultas por alumno y por cada fecha sugerida.
+- Se actualiza VERSION.txt a 12.18.28.
+
+Validación local:
+- Compilación Python y sintaxis Jinja.
+- Suite completa de regresión.
+- Pruebas offline; no se accedió a PostgreSQL de producción ni a Google Calendar real.
+- No se modificaron GitHub, Render ni datos reales.
+
+Nota operativa:
+- No requiere Render Cron Job adicional. Se conserva el worker interno de Google Calendar de la v12.18.27.
+- Las mejoras reducen viajes repetidos a PostgreSQL, pero los tiempos definitivos deben medirse en Render después de desplegar.

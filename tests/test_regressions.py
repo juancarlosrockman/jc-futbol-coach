@@ -247,3 +247,34 @@ def test_coach_bottom_navigation_no_longer_has_agenda_tab():
     assert "new_class" not in coach_nav
     assert "Agenda" not in coach_nav
     assert "url_for('students')" in coach_nav
+
+
+def test_v1228_batches_payment_package_counts_and_pending_pricing_reads():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "def refresh_period_pricing_for_students(c, students, month):" in source
+    route = source.split('@app.route("/entrenador/pagos", methods=["GET","POST"])', 1)[1].split('@app.route("/entrenador/pago/<int:payment_id>/eliminar"', 1)[0]
+    assert "COUNT(*) AS n FROM classes" in route
+    assert "payment_id=ANY(%s)" in route
+    assert "refresh_period_pricing_for_students(c, students, selected_month)" in route
+    assert "for srow in students:" in route
+    assert "c.execute(\"\"\"SELECT amount FROM classes WHERE student_id=%s" not in route
+
+
+def test_v1228_batches_student_package_counts():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    detail = source.split('def student_detail(sid):', 1)[1].split('@app.route("/entrenador/clase/', 1)[0]
+    assert "COUNT(*) FILTER (WHERE status IN ('attended','absent')) AS attended" in detail
+    assert "payment_id=ANY(%s) GROUP BY payment_id" in detail
+    assert 'c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s"' not in detail
+
+
+def test_v1228_availability_recovery_suggestions_use_batched_class_read():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "def automatic_recovery_slots_for_students(c, students, today=None, horizon_days=45):" in source
+    route = source.split('@app.route("/entrenador/disponibilidad", methods=["GET","POST"])', 1)[1].split('@app.route("/entrenador/disponibilidad/eliminar/', 1)[0]
+    assert "automatic_recovery_slots_for_students(c,active_students,today,45)" in route
+    assert "for st in c.execute(\"SELECT id,student_name,zone FROM students" not in route
+
+
+def test_release_version_is_12_18_28():
+    assert (ROOT / "VERSION.txt").read_text(encoding="utf-8").strip() == "12.18.28"

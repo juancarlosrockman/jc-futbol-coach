@@ -787,6 +787,34 @@ def refresh_period_pricing(c, student_id, month):
     with c.connection.cursor() as cur:
         cur.executemany("UPDATE classes SET amount=%s WHERE id=%s",[(amounts[i],rows[i]["id"]) for i in range(len(rows))])
 
+def refresh_period_pricing_for_students(c, students, month):
+    """Apply the existing per-student monthly pricing rules with batched reads/writes."""
+    student_by_id = {st["id"]: st for st in students}
+    if not student_by_id:
+        return
+    rows = c.execute("""SELECT id,student_id FROM classes
+        WHERE student_id = ANY(%s) AND date LIKE %s
+          AND status IN ('scheduled','rescheduled','postponed')
+          AND is_recovery=FALSE AND payment_status<>'paid'
+        ORDER BY student_id,date,time,id""",
+        (list(student_by_id), month + '%')).fetchall()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row["student_id"], []).append(row["id"])
+    updates = []
+    for sid, class_ids in grouped.items():
+        package_price, break_tariff = get_package_terms(student_by_id[sid])
+        if package_price > 0 and len(class_ids) >= 8:
+            unit = package_price / 8.0
+            amounts = [unit if i < 8 else break_tariff for i in range(len(class_ids))]
+        else:
+            amounts = [break_tariff] * len(class_ids)
+        updates.extend((amount, class_id) for amount, class_id in zip(amounts, class_ids))
+    if updates:
+        with c.connection.cursor() as cur:
+            cur.executemany("UPDATE classes SET amount=%s WHERE id=%s", updates)
+
+
 def refresh_all_active_period_pricing(c, student_id=None):
     students=c.execute("SELECT id FROM students WHERE status='active'"+(" AND id=%s" if student_id else ""),((student_id,) if student_id else ())).fetchall()
     for st in students:
@@ -1095,6 +1123,55 @@ def automatic_recovery_slots(c, student_id=None, today=None, horizon_days=45):
             d += timedelta(days=7)
     slots.sort(key=lambda x: (x["date"], x["time"]))
     return slots
+
+
+def automatic_recovery_slots_for_students(c, students, today=None, horizon_days=45):
+    """Same automatic recovery suggestions, using one class read and no per-slot queries."""
+    today = today or datetime.now(PERU_TZ).date()
+    horizon = today + timedelta(days=horizon_days)
+    student_ids = [st["id"] for st in students]
+    if not student_ids:
+        return []
+    rows = c.execute("""SELECT student_id,date,time,status FROM classes
+        WHERE student_id=ANY(%s) AND status IN ('scheduled','rescheduled','postponed')""",
+        (student_ids,)).fetchall()
+    pattern_by_student = {}
+    occupied = set()
+    for row in rows:
+        if row["status"] in ("scheduled", "rescheduled"):
+            occupied.add((row["date"], row["time"]))
+        try:
+            d = date.fromisoformat(row["date"])
+        except (TypeError, ValueError):
+            continue
+        key = (DAYS[d.weekday()], row["time"])
+        pattern_by_student.setdefault(row["student_id"], {}).setdefault(key, set()).add(d)
+
+    now = datetime.now(PERU_TZ)
+    result, seen = [], set()
+    for student in students:
+        patterns = pattern_by_student.get(student["id"], {})
+        for (day_name, tm), dates in patterns.items():
+            if len(dates) < 2:
+                continue
+            last_date = max(dates)
+            weekday = DAYS.index(day_name)
+            d = _next_weekday_on_or_after(today, weekday)
+            while d <= last_date:
+                d += timedelta(days=7)
+            while d <= horizon:
+                if d == today and tm <= now.strftime("%H:%M"):
+                    d += timedelta(days=7)
+                    continue
+                key = (d.isoformat(), tm)
+                if key not in occupied and key not in seen:
+                    seen.add(key)
+                    result.append({"student_name": student["student_name"],
+                        "zone": student.get("zone") or "Zona por indicar",
+                        "date": d.isoformat(), "day": day_name, "time": tm})
+                d += timedelta(days=7)
+    result.sort(key=lambda x: (x["date"], x["time"], x["student_name"]))
+    return result
 
 
 def reschedule_slots(c, current, today):
@@ -1784,11 +1861,20 @@ def student_detail(sid):
     upcoming=sorted([x for x in active_classes if x["date"]>=today_iso and x["status"] in ('scheduled','rescheduled','postponed')], key=lambda x:(x["date"],x["time"],x["id"]))
     history=sorted([x for x in active_classes if x["date"]<today_iso], key=lambda x:(x["date"],x["time"],x["id"]), reverse=True)
     packages = []
-    for p in payments:
-        if p["payment_type"] == "package_8":
-            assigned = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s", (p["id"],)).fetchone()["n"]
-            attended = c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status IN ('attended','absent')", (p["id"],)).fetchone()["n"]
-            packages.append({"payment": p, "assigned": assigned, "attended": attended, "remaining": max(0, (p["sessions_total"] or 8) - assigned)})
+    package_ids=[p["id"] for p in payments if p["payment_type"] == "package_8"]
+    if package_ids:
+        package_counts=c.execute("""SELECT payment_id,COUNT(*) AS assigned,
+            COUNT(*) FILTER (WHERE status IN ('attended','absent')) AS attended
+            FROM classes WHERE payment_id=ANY(%s) GROUP BY payment_id""",(package_ids,)).fetchall()
+        counts_by_payment={r["payment_id"]:r for r in package_counts}
+        for p in payments:
+            if p["payment_type"] != "package_8":
+                continue
+            counts=counts_by_payment.get(p["id"],{})
+            assigned=int(counts.get("assigned") or 0)
+            attended=int(counts.get("attended") or 0)
+            packages.append({"payment":p,"assigned":assigned,"attended":attended,
+                "remaining":max(0,(p["sessions_total"] or 8)-assigned)})
     c.close(); return render_template("student_detail.html", s=s, classes=classes, period_classes=period_classes, upcoming=upcoming, history=history, current_month=current_month, payments=payments, packages=packages, summary=summary, last_work=last_work, current_paid=current_paid, current_pending=current_pending, current_recoveries=current_recoveries)
 
 
@@ -2278,10 +2364,15 @@ def payments():
     rows=c.execute("SELECT payments.*,students.student_name FROM payments LEFT JOIN students ON students.id=payments.student_id ORDER BY payments.month DESC,payments.id DESC").fetchall()
     students=c.execute("SELECT * FROM students WHERE status='active' ORDER BY student_name").fetchall()
     package_info=[]
-    for p in rows:
-        if p["payment_type"]=="package_8":
-            used=c.execute("SELECT COUNT(*) AS n FROM classes WHERE payment_id=%s AND status IN ('attended','absent')",(p["id"],)).fetchone()["n"]
-            package_info.append((p["id"],used,max(0,(p["sessions_total"] or 8)-used)))
+    package_ids=[p["id"] for p in rows if p["payment_type"]=="package_8"]
+    if package_ids:
+        used_rows=c.execute("""SELECT payment_id,COUNT(*) AS n FROM classes
+            WHERE payment_id=ANY(%s) AND status IN ('attended','absent') GROUP BY payment_id""",
+            (package_ids,)).fetchall()
+        used_by_payment={r["payment_id"]:int(r["n"] or 0) for r in used_rows}
+        package_info=[(p["id"],used_by_payment.get(p["id"],0),
+            max(0,(p["sessions_total"] or 8)-used_by_payment.get(p["id"],0)))
+            for p in rows if p["payment_type"]=="package_8"]
     paid=sum(float(r["amount"] or 0) for r in rows if r["status"]=="paid")
     current_month=datetime.now(PERU_TZ).strftime("%Y-%m")
     selected_month=request.args.get("month") or current_month
@@ -2290,18 +2381,23 @@ def payments():
     pending_by_student={}
     pending_tariff_by_student={}
     pending_count_by_student={}
+    refresh_period_pricing_for_students(c, students, selected_month)
+    pending_rows=c.execute("""SELECT student_id,amount FROM classes WHERE student_id=ANY(%s)
+        AND date LIKE %s AND status IN ('scheduled','rescheduled','postponed')
+        AND payment_status<>'paid' AND is_recovery=FALSE ORDER BY student_id,date,time,id""",
+        ([srow["id"] for srow in students],selected_month+'%')).fetchall() if students else []
+    pending_grouped={}
+    for row in pending_rows:
+        pending_grouped.setdefault(row["student_id"],[]).append(row)
     for srow in students:
-        refresh_period_pricing(c,srow["id"],selected_month)
-        pending_rows=c.execute("""SELECT amount FROM classes WHERE student_id=%s AND date LIKE %s
-            AND status IN ('scheduled','rescheduled','postponed') AND payment_status<>'paid' AND is_recovery=FALSE
-            ORDER BY date,time,id""",(srow["id"],selected_month+'%')).fetchall()
-        pending_amount=sum(float(r["amount"] or 0) for r in pending_rows)
-        rates={round(float(r["amount"] or 0),2) for r in pending_rows if float(r["amount"] or 0)>0}
+        student_pending=pending_grouped.get(srow["id"],[])
+        pending_amount=sum(float(r["amount"] or 0) for r in student_pending)
+        rates={round(float(r["amount"] or 0),2) for r in student_pending if float(r["amount"] or 0)>0}
         break_tariff=float(srow.get("break_tariff") or srow["tariff"] or 0)
         pending_tariff_by_student[srow["id"]]=next(iter(rates)) if len(rates)==1 else break_tariff
         if pending_amount>0:
             pending_by_student[srow["id"]]=pending_amount
-            pending_count_by_student[srow["id"]]=len(pending_rows)
+            pending_count_by_student[srow["id"]]=len(student_pending)
     pending_total=sum(pending_by_student.values())
     monthly_totals=[]
     for r in rows:
@@ -2468,14 +2564,9 @@ def availability():
         WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4 WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 ELSE 7 END,time,zone""").fetchall()
     status_rows=c.execute("SELECT turn,is_full FROM availability_status WHERE month='global'").fetchall()
     status={r["turn"]:bool(r["is_full"]) for r in status_rows}
-    today=datetime.now(PERU_TZ).date(); recovery=[]; seen=set()
-    for st in c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall():
-        for x in automatic_recovery_slots(c, st['id'], today, 45):
-            key=(x['date'],x['time'])
-            if key in seen: continue
-            seen.add(key)
-            recovery.append({'student_name':st['student_name'],'zone':st['zone'] or 'Zona por indicar','date':x['date'],'day':x['day'],'time':x['time']})
-    recovery.sort(key=lambda x:(x['date'],x['time'],x['student_name']))
+    today=datetime.now(PERU_TZ).date()
+    active_students=c.execute("SELECT id,student_name,zone FROM students WHERE status='active' ORDER BY student_name").fetchall()
+    recovery=automatic_recovery_slots_for_students(c,active_students,today,45)
     manual_recovery=c.execute("SELECT * FROM recovery_slots WHERE active=TRUE AND date>=%s ORDER BY date,time,id",(today.isoformat(),)).fetchall()
     c.close()
     return render_template("availability.html",availability=av,days=DAYS,turns=TURN_ORDER,agenda_status=status,current_month=current_month,recovery_slots=recovery,manual_recovery=manual_recovery)
