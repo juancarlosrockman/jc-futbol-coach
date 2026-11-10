@@ -1,0 +1,16 @@
+JC Fútbol Coach v12.18.27 — Panel de coach simplificado
+
+Cambios:
+- Se retiró la pestaña inferior «Agenda» del panel de coach. La ruta para agendar clases se conserva y se sigue utilizando desde la ficha individual del alumno.
+- Se retiraron los accesos directos de agendamiento de la pantalla Inicio para mantener el flujo habitual desde las fichas.
+- El resumen del inicio ahora muestra alumnos del mes pasado y alumnos del presente mes.
+- El conteo mensual considera alumnos únicos con al menos una clase no cancelada en el mes. Incluye alumnos que posteriormente hayan pasado a inactivos, para conservar el dato histórico real.
+- Al final de Inicio se muestra el número y el detalle de las recuperaciones marcadas como recuperación y programadas/reprogramadas/postergadas dentro del mes actual.
+- Se conserva la lógica existente de clases, pagos, Google Calendar y demás funciones.
+
+Validación local:
+- Compilación Python: correcta.
+- Pruebas automatizadas: 27 aprobadas.
+- Plantillas Jinja: validadas por la suite.
+- No se probaron conexiones reales a PostgreSQL ni Google Calendar.
+- No se modificaron datos reales, GitHub ni Render.

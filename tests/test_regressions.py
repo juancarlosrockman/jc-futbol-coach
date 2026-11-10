@@ -218,3 +218,32 @@ def test_calendar_page_does_not_claim_saved_token_is_verified():
 def test_background_worker_uses_calendar_deduplication_for_retries():
     worker = (ROOT / "google_calendar_worker.py").read_text(encoding="utf-8")
     assert "sync_class_to_google(class_id, dedupe_calendar=True)" in worker
+
+
+def test_coach_dashboard_shows_monthly_student_counts():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    assert "students_previous_month" in source and "students_current_month" in source
+    assert "COUNT(DISTINCT student_id)" in source
+    assert "status <> 'cancelled'" in source
+    assert "Alumnos del mes pasado" in template
+    assert "Alumnos del presente mes" in template
+
+
+def test_coach_dashboard_lists_recovery_sessions_by_student():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    assert "recovery_rows" in source
+    assert "cl.is_recovery=TRUE" in source
+    assert "s.student_name" in source
+    assert "Recuperaciones pendientes" in template
+    assert "{{r.student_name" in template
+    assert "{{display_date(r.date)}}" in template
+
+
+def test_coach_bottom_navigation_no_longer_has_agenda_tab():
+    template = (ROOT / "templates" / "layout.html").read_text(encoding="utf-8")
+    coach_nav = template.split("{% elif session.get('role')=='coach'", 1)[1].split("{% endif %}", 1)[0]
+    assert "new_class" not in coach_nav
+    assert "Agenda" not in coach_nav
+    assert "url_for('students')" in coach_nav

@@ -1445,19 +1445,46 @@ def dashboard():
                     package_remaining -= 1
                 else:
                     pending_payments += 1
-    current_month = datetime.now(PERU_TZ).strftime("%Y-%m")
+    now_local = datetime.now(PERU_TZ).date()
+    current_month = now_local.strftime("%Y-%m")
+    previous_month = (now_local.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     month_income = c.execute("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status='paid' AND month=%s", (current_month,)).fetchone()["total"]
     month_pending = c.execute("""SELECT COALESCE(SUM(amount),0) AS total FROM classes
         WHERE date LIKE %s AND status IN ('scheduled','rescheduled','postponed')
         AND payment_status <> 'paid'""", (current_month + '%',)).fetchone()["total"]
-    month_recoveries = c.execute("""SELECT COUNT(*) AS n FROM classes
-        WHERE date LIKE %s AND is_recovery=TRUE AND status IN ('scheduled','rescheduled','postponed')""", (current_month + '%',)).fetchone()["n"]
+
+    # Monthly student control: count each student once if they had at least
+    # one non-cancelled class in that calendar month. This includes students
+    # who later became inactive, so the historical month remains accurate.
+    students_previous_month = c.execute("""SELECT COUNT(DISTINCT student_id) AS n FROM classes
+        WHERE date LIKE %s AND student_id IS NOT NULL AND status <> 'cancelled'""",
+        (previous_month + '%',)).fetchone()["n"]
+    students_current_month = c.execute("""SELECT COUNT(DISTINCT student_id) AS n FROM classes
+        WHERE date LIKE %s AND student_id IS NOT NULL AND status <> 'cancelled'""",
+        (current_month + '%',)).fetchone()["n"]
+
+    # List the pending recovery sessions that are scheduled in the current
+    # month, using the same definition as the previous dashboard counter.
+    recovery_rows = c.execute("""SELECT cl.id,cl.student_id,cl.date,cl.time,
+            cl.original_date,cl.recovery_month,cl.status,s.student_name
+        FROM classes cl LEFT JOIN students s ON s.id=cl.student_id
+        WHERE cl.date LIKE %s AND cl.is_recovery=TRUE
+          AND cl.status IN ('scheduled','rescheduled','postponed')
+        ORDER BY cl.date,cl.time, s.student_name, cl.id""",
+        (current_month + '%',)).fetchall()
+    month_recoveries = len(recovery_rows)
     teams = c.execute("SELECT * FROM teams WHERE date >= %s ORDER BY date,time LIMIT 10", (today,)).fetchall()
     c.close()
+    month_names = {current_month: f"{MONTHS_ES[now_local.month-1].capitalize()} de {now_local.year}"}
+    prev_date = now_local.replace(day=1) - timedelta(days=1)
+    month_names[previous_month] = f"{MONTHS_ES[prev_date.month-1].capitalize()} de {prev_date.year}"
     return render_template("dashboard.html", students=students, classes=classes, today_classes=today_classes,
                            wait_count=wait_count, pending_payments=pending_payments, teams=teams, notifications=notifications,
-                           current_month=current_month, month_income=float(month_income or 0),
-                           month_pending=float(month_pending or 0), month_recoveries=int(month_recoveries or 0))
+                           current_month=current_month, previous_month=previous_month, month_names=month_names,
+                           students_previous_month=int(students_previous_month or 0),
+                           students_current_month=int(students_current_month or 0),
+                           month_income=float(month_income or 0), month_pending=float(month_pending or 0),
+                           month_recoveries=int(month_recoveries or 0), recovery_rows=recovery_rows)
 
 
 @app.route("/entrenador/alumnos")
